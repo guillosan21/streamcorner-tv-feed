@@ -1,0 +1,49 @@
+name: Update StreamCorner TV feed
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/10 * * * *"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  update-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out scraper
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Scrape current games and stream URLs
+        env:
+          APP_FEED_OUTPUT: site/games.json
+          SCRAPE_OUTPUT: private-data/scraped-streams.json
+          STATUS_OUTPUT: site/status.json
+        run: node tools/scrape-streams.mjs
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload feed
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy feed
+        id: deployment
+        uses: actions/deploy-pages@v4
