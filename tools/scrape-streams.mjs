@@ -10,6 +10,7 @@ const APP_FEED_OUTPUT = process.env.APP_FEED_OUTPUT || "app/src/main/assets/game
 const SCRAPE_OUTPUT = process.env.SCRAPE_OUTPUT || "data/scraped-streams.json";
 const STATUS_OUTPUT = process.env.STATUS_OUTPUT || "";
 const ESPN_CORE_API = "https://sports.core.api.espn.com/v2/sports";
+const PREVIOUS_FEED_URL = process.env.PREVIOUS_FEED_URL || "https://guillosan21.github.io/streamcorner-tv-feed/games.json";
 
 const teamLeagues = [
   { id: "NFL", path: "football/nfl", name: "NFL", sport: "American Football", region: "United States", minimum: 28 },
@@ -84,7 +85,14 @@ try {
       const previous = JSON.parse(await readFile(APP_FEED_OUTPUT, "utf8"));
       return Array.isArray(previous.teams) ? previous.teams : [];
     } catch {
-      return [];
+      try {
+        const response = await fetch(`${PREVIOUS_FEED_URL}?previous=${Date.now()}`, { signal: AbortSignal.timeout(15_000) });
+        if (!response.ok) return [];
+        const previous = await response.json();
+        return Array.isArray(previous.teams) ? previous.teams : [];
+      } catch {
+        return [];
+      }
     }
   }
 
@@ -140,6 +148,7 @@ try {
     }
     const teams = [...new Map(catalog.map((team) => [team.id, team])).values()]
       .sort((a, b) => a.region.localeCompare(b.region) || a.leagueName.localeCompare(b.leagueName) || a.name.localeCompare(b.name));
+    if (errors.length) throw new Error(`Team catalog update incomplete: ${errors.join("; ")}`);
     return { teams, errors };
   }
 
