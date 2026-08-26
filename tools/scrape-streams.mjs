@@ -49,6 +49,8 @@ const providerNames = {
   "003": "#003",
 };
 
+const NON_SPORTS_ENTERTAINMENT = /family guy|the simpsons|south park|rick and morty|cartoon|anime|movie|cinema|sitcom|tv show|reality tv/i;
+
 const tempDirectory = await mkdtemp(join(tmpdir(), "streamcorner-scrape-"));
 
 try {
@@ -176,8 +178,12 @@ try {
       sourceId: job.id,
       title: String(detail.event_name || job.row.event_name || `${providerNames[job.provider]} ${job.id}`),
       league: String(detail.league || detail.category || job.row.league || job.row.category || providerNames[job.provider]),
+      sport: String(detail.category || job.row.category || detail.league || job.row.league || "Sports"),
       startsAt,
       status: timestamp > nowSeconds ? "upcoming" : "live",
+      is24x7: /24\s*(?:\/|x)\s*7/i.test(
+        `${detail.title || job.row.title || ""} ${detail.league || job.row.league || ""} ${detail.category || job.row.category || ""}`,
+      ),
       homeTeam: String(detail.home_team || job.row.home_team || ""),
       awayTeam: String(detail.away_team || job.row.away_team || ""),
       homeLogoUrl: String(detail.home_team_logo || job.row.home_team_logo || ""),
@@ -186,7 +192,7 @@ try {
       categoryLogoUrl: String(detail.category_logo || job.row.category_logo || ""),
       sources,
     };
-  });
+  }).filter((game) => !NON_SPORTS_ENTERTAINMENT.test(`${game.title} ${game.league} ${game.sport}`));
 
   const directStreams = games.flatMap((game) => game.sources
     .filter((source) => source.url)
