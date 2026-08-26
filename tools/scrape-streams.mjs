@@ -3,8 +3,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const DECODER_URL = process.env.STREAMCORNER_DECODER_URL
-  || "https://streamcorner.st/assets/BjKHyKrh.js";
+const SITE_URL = "https://streamcorner.st/";
+const DEFAULT_DECODER_URL = "https://streamcorner.st/assets/BjKHyKrh.js";
+const CONFIGURED_DECODER_URL = process.env.STREAMCORNER_DECODER_URL || "";
 const APP_FEED_OUTPUT = process.env.APP_FEED_OUTPUT || "app/src/main/assets/games.json";
 const SCRAPE_OUTPUT = process.env.SCRAPE_OUTPUT || "data/scraped-streams.json";
 const STATUS_OUTPUT = process.env.STATUS_OUTPUT || "";
@@ -51,11 +52,56 @@ const providerNames = {
 const tempDirectory = await mkdtemp(join(tmpdir(), "streamcorner-scrape-"));
 
 try {
-  const decoderPath = join(tempDirectory, "decoder.mjs");
-  const decoderResponse = await fetch(DECODER_URL);
-  if (!decoderResponse.ok) throw new Error(`Decoder download failed: HTTP ${decoderResponse.status}`);
-  await writeFile(decoderPath, await decoderResponse.text(), "utf8");
-  const decoder = await import(`${pathToFileURL(decoderPath).href}?v=${Date.now()}`);
+  async function findDecoder() {
+    const candidates = [];
+    if (CONFIGURED_DECODER_URL) candidates.push(CONFIGURED_DECODER_URL);
+    candidates.push(DEFAULT_DECODER_URL);
+
+    try {
+      const pageResponse = await fetch(SITE_URL, { signal: AbortSignal.timeout(15_000) });
+      if (pageResponse.ok) {
+        const html = await pageResponse.text();
+        for (const match of html.matchAll(/(?:src|href)=["']([^"']+\.js(?:\?[^"']*)?)["']/gi)) {
+          candidates.push(new URL(match[1], SITE_URL).href);
+        }
+      }
+    } catch {
+      // The configured/default asset may still work when the homepage is temporarily unavailable.
+    }
+
+    const uniqueCandidates = [...new Set(candidates)];
+    let lastError;
+    for (const [index, url] of uniqueCandidates.entries()) {
+      try {
+        const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const decoderPath = join(tempDirectory, `decoder-${index}.mjs`);
+        await writeFile(decoderPath, await response.text(), "utf8");
+        const module = await import(`${pathToFileURL(decoderPath).href}?v=${Date.now()}`);
+        if (typeof module.j !== "function") throw new Error("asset does not export decoder function j");
+        return { decoder: module, decoderUrl: url };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw new Error(`No compatible StreamCorner decoder was found: ${String(lastError || "unknown error")}`);
+  }
+
+  const { decoder, decoderUrl } = await findDecoder();
+
+  async function withTimeout(promise, timeoutMs, label) {
+    let timer;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   async function request(provider, id = "") {
     let lastError;
@@ -64,7 +110,11 @@ try {
       if (id) query.set("id", id);
       const url = `https://${worker}/corner?${query}`;
       try {
-        return await decoder.j(url, provider, providerNames[provider] || provider.toUpperCase());
+        return await withTimeout(
+          decoder.j(url, provider, providerNames[provider] || provider.toUpperCase()),
+          12_000,
+          `${provider}:${id || "catalog"}`,
+        );
       } catch (error) {
         lastError = error;
       }
@@ -73,6 +123,7 @@ try {
   }
 
   const jobs = [];
+  const seenJobs = new Set();
   const catalogCounts = {};
   for (const provider of providers) {
     const result = await request(provider);
@@ -80,7 +131,11 @@ try {
     catalogCounts[provider] = rows.length;
     for (const row of rows) {
       const id = String(row.stream_id || row.game_id || row.channel_id || "").trim();
-      if (id) jobs.push({ provider, id, row });
+      const key = `${provider}:${id}`;
+      if (id && !seenJobs.has(key)) {
+        seenJobs.add(key);
+        jobs.push({ provider, id, row });
+      }
     }
   }
 
@@ -122,7 +177,13 @@ try {
       title: String(detail.event_name || job.row.event_name || `${providerNames[job.provider]} ${job.id}`),
       league: String(detail.league || detail.category || job.row.league || job.row.category || providerNames[job.provider]),
       startsAt,
-      status: timestamp > nowSeconds + 1800 ? "upcoming" : "live",
+      status: timestamp > nowSeconds ? "upcoming" : "live",
+      homeTeam: String(detail.home_team || job.row.home_team || ""),
+      awayTeam: String(detail.away_team || job.row.away_team || ""),
+      homeLogoUrl: String(detail.home_team_logo || job.row.home_team_logo || ""),
+      awayLogoUrl: String(detail.away_team_logo || job.row.away_team_logo || ""),
+      posterUrl: String(detail.poster || job.row.poster || ""),
+      categoryLogoUrl: String(detail.category_logo || job.row.category_logo || ""),
       sources,
     };
   });
@@ -145,7 +206,7 @@ try {
   };
   const scrape = {
     scrapedAt: now.toISOString(),
-    decoderUrl: DECODER_URL,
+    decoderUrl,
     catalogCounts,
     gameCount: games.length,
     directStreamCount: directStreams.length,
@@ -166,6 +227,7 @@ try {
       gameCount: games.length,
       directStreamCount: directStreams.length,
       m3u8Count: m3u8.length,
+      decoderUrl,
     }, null, 2)}\n`, "utf8");
   }
 
@@ -174,6 +236,7 @@ try {
     gameCount: games.length,
     directStreamCount: directStreams.length,
     m3u8Count: m3u8.length,
+    decoderUrl,
     feedOutput: APP_FEED_OUTPUT,
     scrapeOutput: SCRAPE_OUTPUT,
   }, null, 2));
