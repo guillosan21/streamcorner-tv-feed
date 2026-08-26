@@ -29,6 +29,11 @@ const teamLeagues = [
   { id: "LIGUE_1", path: "soccer/fra.1", name: "Ligue 1", sport: "Soccer", region: "European Soccer", minimum: 16 },
   { id: "UCL", path: "soccer/uefa.champions", name: "UEFA Champions League", sport: "Soccer", region: "European Soccer", minimum: 20, fallbackPreviousSeason: true },
 ];
+const scheduleLeagues = [
+  ...teamLeagues,
+  { id: "UEL", path: "soccer/uefa.europa", name: "UEFA Europa League", sport: "Soccer", region: "European Soccer" },
+  { id: "EFL_CUP", path: "soccer/eng.league_cup", name: "EFL Cup", sport: "Soccer", region: "European Soccer" },
+];
 
 const workers = [
   "data.gigav.workers.dev",
@@ -83,7 +88,7 @@ async function fetchMajorLeagueSchedules(now) {
   const end = new Date(now.getTime() + 45 * 24 * 60 * 60 * 1000);
   const dates = `${compactDate(now)}-${compactDate(end)}`;
   const games = [];
-  for (const league of teamLeagues) {
+  for (const league of scheduleLeagues) {
     try {
       const response = await fetch(`${ESPN_SITE_API}/${league.path}/scoreboard?dates=${dates}&limit=1000`, {
         headers: { Accept: "application/json", "User-Agent": "StreamCorner-TV-Feed/1.3" }, signal: AbortSignal.timeout(25_000),
@@ -92,7 +97,8 @@ async function fetchMajorLeagueSchedules(now) {
       const payload = await response.json();
       for (const event of Array.isArray(payload?.events) ? payload.events : []) {
         const competition = event?.competitions?.[0] || {};
-        if (event?.status?.type?.state === "post") continue;
+        const scheduleState = String(event?.status?.type?.state || "").toLowerCase();
+        if (scheduleState === "post") continue;
         const startsAt = new Date(event.date);
         if (!Number.isFinite(startsAt.getTime())) continue;
         const competitors = Array.isArray(competition.competitors) ? competition.competitors : [];
@@ -113,7 +119,7 @@ async function fetchMajorLeagueSchedules(now) {
           sourceId: String(event.id || ""),
           title, league: league.name, sport: league.sport,
           startsAt: startsAt.toISOString(), endsAt: new Date(endSeconds * 1000).toISOString(),
-          status: startsAt.getTime() > now.getTime() ? "upcoming" : "live", is24x7: false,
+          status: scheduleState === "in" ? "live" : "upcoming", scheduleState, is24x7: false,
           homeTeam, awayTeam,
           homeLogoUrl: String(home.team?.logo || "").replace(/^http:/, "https:"),
           awayLogoUrl: String(away.team?.logo || "").replace(/^http:/, "https:"),
@@ -367,7 +373,9 @@ try {
         clearKey: String(source.stream_keys || ""),
         embedUrl: String(source.embed_url || ""),
       }))
-      .filter((source) => source.url || source.embedUrl);
+      .filter((source) => source.url || source.embedUrl)
+      .filter((source, sourceIndex, rows) => rows.findIndex((candidate) =>
+        source.url ? candidate.url === source.url && candidate.clearKey === source.clearKey : candidate.embedUrl === source.embedUrl) === sourceIndex);
 
     return {
       id: `${job.provider}-${job.id}`,
@@ -392,17 +400,21 @@ try {
   }).filter((game) => game.status && isSupportedSportsEntry(game));
 
   const scheduledGames = await fetchMajorLeagueSchedules(now);
+  const matchedSourceGames = new Set();
   for (const scheduled of scheduledGames) {
     const scheduledTeams = [canonicalTeam(scheduled.homeTeam), canonicalTeam(scheduled.awayTeam)].filter(Boolean).sort().join("|");
     const match = games.find((game) => {
       const gameTeams = [canonicalTeam(game.homeTeam), canonicalTeam(game.awayTeam)].filter(Boolean).sort().join("|");
-      const closeInTime = Math.abs(Date.parse(game.startsAt) - Date.parse(scheduled.startsAt)) <= 18 * 60 * 60 * 1000;
-      return closeInTime && scheduledTeams && gameTeams === scheduledTeams;
+      const closeInTime = Math.abs(Date.parse(game.startsAt) - Date.parse(scheduled.startsAt)) <= 6 * 60 * 60 * 1000;
+      return !matchedSourceGames.has(game.id) && closeInTime && scheduledTeams && gameTeams === scheduledTeams;
     });
     if (match) {
+      matchedSourceGames.add(match.id);
       match.venue ||= scheduled.venue;
       match.homeLogoUrl ||= scheduled.homeLogoUrl;
       match.awayLogoUrl ||= scheduled.awayLogoUrl;
+      match.scheduleState = scheduled.scheduleState;
+      match.status = scheduled.status;
     } else {
       games.push(scheduled);
     }
