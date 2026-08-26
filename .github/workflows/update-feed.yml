@@ -1,6 +1,12 @@
 name: Update StreamCorner TV feed
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "tools/**"
+      - ".github/workflows/update-feed.yml"
   workflow_dispatch:
   schedule:
     - cron: "*/10 * * * *"
