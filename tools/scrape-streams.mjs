@@ -50,6 +50,13 @@ const providerNames = {
 };
 
 const NON_SPORTS_ENTERTAINMENT = /family guy|the simpsons|south park|rick and morty|cartoon|anime|movie|cinema|sitcom|tv show|reality tv/i;
+const SPORTS_24X7_SIGNAL = /sports?|espn|dazn|bein|nfl|nba|wnba|mlb|nhl|mls|ncaa|uefa|fifa|football|basketball|baseball|hockey|soccer|tennis|golf|racing|motorsport|boxing|mma|ufc|wwe|aew|wrestling|cricket|rugby|cycling|snooker|darts|lacrosse/i;
+
+function isSupportedSportsEntry(game) {
+  const description = `${game.title} ${game.league} ${game.sport}`;
+  if (NON_SPORTS_ENTERTAINMENT.test(description)) return false;
+  return !game.is24x7 || SPORTS_24X7_SIGNAL.test(description);
+}
 
 const tempDirectory = await mkdtemp(join(tmpdir(), "streamcorner-scrape-"));
 
@@ -163,6 +170,10 @@ try {
     const detail = details[index] || job.row;
     const timestamp = Number(detail.timestamp || job.row.timestamp || 0);
     const startsAt = timestamp > 0 ? new Date(timestamp * 1000).toISOString() : now.toISOString();
+    const title = String(detail.event_name || job.row.event_name || detail.title || job.row.title || `${providerNames[job.provider]} ${job.id}`);
+    const league = String(detail.league || detail.category || job.row.league || job.row.category || providerNames[job.provider]);
+    const sport = String(detail.category || job.row.category || detail.league || job.row.league || "Sports");
+    const is24x7 = /24\s*(?:\/|x)\s*7/i.test(`${title} ${league} ${sport}`);
     const sources = (Array.isArray(detail.streams) ? detail.streams : [])
       .map((source, sourceIndex) => ({
         name: String(source.source_name || `Source ${sourceIndex + 1}`),
@@ -176,14 +187,12 @@ try {
       id: `${job.provider}-${job.id}`,
       provider: job.provider,
       sourceId: job.id,
-      title: String(detail.event_name || job.row.event_name || `${providerNames[job.provider]} ${job.id}`),
-      league: String(detail.league || detail.category || job.row.league || job.row.category || providerNames[job.provider]),
-      sport: String(detail.category || job.row.category || detail.league || job.row.league || "Sports"),
+      title,
+      league,
+      sport,
       startsAt,
       status: timestamp > nowSeconds ? "upcoming" : "live",
-      is24x7: /24\s*(?:\/|x)\s*7/i.test(
-        `${detail.title || job.row.title || ""} ${detail.league || job.row.league || ""} ${detail.category || job.row.category || ""}`,
-      ),
+      is24x7,
       homeTeam: String(detail.home_team || job.row.home_team || ""),
       awayTeam: String(detail.away_team || job.row.away_team || ""),
       homeLogoUrl: String(detail.home_team_logo || job.row.home_team_logo || ""),
@@ -192,7 +201,7 @@ try {
       categoryLogoUrl: String(detail.category_logo || job.row.category_logo || ""),
       sources,
     };
-  }).filter((game) => !NON_SPORTS_ENTERTAINMENT.test(`${game.title} ${game.league} ${game.sport}`));
+  }).filter(isSupportedSportsEntry);
 
   const directStreams = games.flatMap((game) => game.sources
     .filter((source) => source.url)
