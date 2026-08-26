@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -9,6 +9,24 @@ const CONFIGURED_DECODER_URL = process.env.STREAMCORNER_DECODER_URL || "";
 const APP_FEED_OUTPUT = process.env.APP_FEED_OUTPUT || "app/src/main/assets/games.json";
 const SCRAPE_OUTPUT = process.env.SCRAPE_OUTPUT || "data/scraped-streams.json";
 const STATUS_OUTPUT = process.env.STATUS_OUTPUT || "";
+const ESPN_CORE_API = "https://sports.core.api.espn.com/v2/sports";
+
+const teamLeagues = [
+  { id: "NFL", path: "football/nfl", name: "NFL", sport: "American Football", region: "United States", minimum: 28 },
+  { id: "NBA", path: "basketball/nba", name: "NBA", sport: "Basketball", region: "United States", minimum: 25 },
+  { id: "WNBA", path: "basketball/wnba", name: "WNBA", sport: "Basketball", region: "United States", minimum: 10, exclude: ["JAPAN", "NIGERIA"] },
+  { id: "MLB", path: "baseball/mlb", name: "MLB", sport: "Baseball", region: "United States", minimum: 25 },
+  { id: "NHL", path: "hockey/nhl", name: "NHL", sport: "Hockey", region: "United States", minimum: 25 },
+  { id: "MLS", path: "soccer/usa.1", name: "MLS", sport: "Soccer", region: "United States", minimum: 20, exclude: ["Liga MX All-Stars", "MLS All-Stars"] },
+  { id: "NWSL", path: "soccer/usa.nwsl", name: "NWSL", sport: "Soccer", region: "United States", minimum: 10 },
+  { id: "LIGA_MX", path: "soccer/mex.1", name: "Liga MX", sport: "Soccer", region: "Mexico", minimum: 14 },
+  { id: "PREMIER_LEAGUE", path: "soccer/eng.1", name: "Premier League", sport: "Soccer", region: "European Soccer", minimum: 18 },
+  { id: "LA_LIGA", path: "soccer/esp.1", name: "La Liga", sport: "Soccer", region: "European Soccer", minimum: 18 },
+  { id: "SERIE_A", path: "soccer/ita.1", name: "Serie A", sport: "Soccer", region: "European Soccer", minimum: 18 },
+  { id: "BUNDESLIGA", path: "soccer/ger.1", name: "Bundesliga", sport: "Soccer", region: "European Soccer", minimum: 16 },
+  { id: "LIGUE_1", path: "soccer/fra.1", name: "Ligue 1", sport: "Soccer", region: "European Soccer", minimum: 16 },
+  { id: "UCL", path: "soccer/uefa.champions", name: "UEFA Champions League", sport: "Soccer", region: "European Soccer", minimum: 20, fallbackPreviousSeason: true },
+];
 
 const workers = [
   "data.gigav.workers.dev",
@@ -61,6 +79,70 @@ function isSupportedSportsEntry(game) {
 const tempDirectory = await mkdtemp(join(tmpdir(), "streamcorner-scrape-"));
 
 try {
+  async function loadPreviousTeams() {
+    try {
+      const previous = JSON.parse(await readFile(APP_FEED_OUTPUT, "utf8"));
+      return Array.isArray(previous.teams) ? previous.teams : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async function fetchTeamCatalog() {
+    const previous = await loadPreviousTeams();
+    const previousByLeague = new Map();
+    for (const team of previous) {
+      const saved = previousByLeague.get(team.leagueId) || [];
+      saved.push(team);
+      previousByLeague.set(team.leagueId, saved);
+    }
+    const catalog = [];
+    const errors = [];
+    for (const league of teamLeagues) {
+      try {
+        let season = new Date().getUTCFullYear();
+        const [apiSport, apiLeague] = league.path.split("/");
+        const loadRefs = async () => {
+          const response = await fetch(`${ESPN_CORE_API}/${apiSport}/leagues/${apiLeague}/seasons/${season}/teams?limit=100`, {
+            headers: { Accept: "application/json", "User-Agent": "StreamCorner-TV-Feed/1.2" }, signal: AbortSignal.timeout(20_000),
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const payload = await response.json();
+          return Array.isArray(payload?.items) ? payload.items.map((item) => String(item?.$ref || "").replace(/^http:/, "https:")).filter(Boolean) : [];
+        };
+        let refs = await loadRefs();
+        if (refs.length < league.minimum && league.fallbackPreviousSeason) { season -= 1; refs = await loadRefs(); }
+        if (refs.length < league.minimum) throw new Error(`only ${refs.length} teams`);
+        const rows = [];
+        for (let offset = 0; offset < refs.length; offset += 12) {
+          const batch = await Promise.all(refs.slice(offset, offset + 12).map(async (ref) => {
+            const teamResponse = await fetch(ref, { signal: AbortSignal.timeout(20_000) });
+            if (!teamResponse.ok) throw new Error(`team returned HTTP ${teamResponse.status}`);
+            return teamResponse.json();
+          }));
+          rows.push(...batch);
+        }
+        const eligibleRows = rows.filter((team) => !league.exclude?.includes(String(team.displayName || team.name || "").trim()));
+        catalog.push(...eligibleRows.map((team) => ({
+          id: `${league.id}:${String(team.id || team.displayName).trim()}`,
+          name: String(team.displayName || team.name || "").trim(),
+          leagueId: league.id,
+          leagueName: league.name,
+          sport: league.sport,
+          region: league.region,
+          logoUrl: String((team.logos || []).find((logo) => logo.rel?.includes("primary_logo_on_black_color"))?.href || (team.logos || []).find((logo) => logo.rel?.includes("default"))?.href || "").trim().replace(/^http:/, "https:"),
+        })).filter((team) => team.name));
+      } catch (error) {
+        const saved = previousByLeague.get(league.id) || [];
+        if (saved.length >= league.minimum) catalog.push(...saved);
+        else errors.push(`${league.name}: ${String(error)}`);
+      }
+    }
+    const teams = [...new Map(catalog.map((team) => [team.id, team])).values()]
+      .sort((a, b) => a.region.localeCompare(b.region) || a.leagueName.localeCompare(b.leagueName) || a.name.localeCompare(b.name));
+    return { teams, errors };
+  }
+
   async function findDecoder() {
     const candidates = [];
     if (CONFIGURED_DECODER_URL) candidates.push(CONFIGURED_DECODER_URL);
@@ -214,9 +296,11 @@ try {
     })));
   const m3u8 = directStreams.filter((stream) => /\.m3u8(?:$|\?)/i.test(stream.url));
 
+  const teamCatalog = await fetchTeamCatalog();
   const feed = {
     updatedAt: now.toISOString(),
     catalogCounts,
+    teams: teamCatalog.teams,
     games,
   };
   const scrape = {
@@ -243,6 +327,8 @@ try {
       directStreamCount: directStreams.length,
       m3u8Count: m3u8.length,
       decoderUrl,
+      teamCount: teamCatalog.teams.length,
+      teamCatalogErrors: teamCatalog.errors,
     }, null, 2)}\n`, "utf8");
   }
 
@@ -252,6 +338,8 @@ try {
     directStreamCount: directStreams.length,
     m3u8Count: m3u8.length,
     decoderUrl,
+    teamCount: teamCatalog.teams.length,
+    teamCatalogErrors: teamCatalog.errors,
     feedOutput: APP_FEED_OUTPUT,
     scrapeOutput: SCRAPE_OUTPUT,
   }, null, 2));
