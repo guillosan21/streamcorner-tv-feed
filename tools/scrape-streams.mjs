@@ -10,6 +10,7 @@ const APP_FEED_OUTPUT = process.env.APP_FEED_OUTPUT || "app/src/main/assets/game
 const SCRAPE_OUTPUT = process.env.SCRAPE_OUTPUT || "data/scraped-streams.json";
 const STATUS_OUTPUT = process.env.STATUS_OUTPUT || "";
 const ESPN_CORE_API = "https://sports.core.api.espn.com/v2/sports";
+const ESPN_SITE_API = "https://site.web.api.espn.com/apis/site/v2/sports";
 const PREVIOUS_FEED_URL = process.env.PREVIOUS_FEED_URL || "https://guillosan21.github.io/streamcorner-tv-feed/games.json";
 
 const teamLeagues = [
@@ -67,6 +68,86 @@ function estimatedDurationSeconds(title, league, sport) {
   if (/baseball|mlb|american football|nfl|cfl/.test(value)) return 6 * 60 * 60;
   if (/basketball|nba|wnba|hockey|nhl|soccer|football/.test(value)) return 4 * 60 * 60;
   return 8 * 60 * 60;
+}
+
+function compactDate(date) {
+  return date.toISOString().slice(0, 10).replaceAll("-", "");
+}
+
+function canonicalTeam(value) {
+  return String(value || "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()
+    .replace(/\b(fc|cf|afc|club)\b/g, " ").replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+async function fetchMajorLeagueSchedules(now) {
+  const end = new Date(now.getTime() + 45 * 24 * 60 * 60 * 1000);
+  const dates = `${compactDate(now)}-${compactDate(end)}`;
+  const games = [];
+  for (const league of teamLeagues) {
+    try {
+      const response = await fetch(`${ESPN_SITE_API}/${league.path}/scoreboard?dates=${dates}&limit=1000`, {
+        headers: { Accept: "application/json", "User-Agent": "StreamCorner-TV-Feed/1.3" }, signal: AbortSignal.timeout(25_000),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = await response.json();
+      for (const event of Array.isArray(payload?.events) ? payload.events : []) {
+        const competition = event?.competitions?.[0] || {};
+        if (event?.status?.type?.state === "post") continue;
+        const startsAt = new Date(event.date);
+        if (!Number.isFinite(startsAt.getTime())) continue;
+        const competitors = Array.isArray(competition.competitors) ? competition.competitors : [];
+        const home = competitors.find((item) => item.homeAway === "home") || {};
+        const away = competitors.find((item) => item.homeAway === "away") || {};
+        const homeTeam = String(home.team?.displayName || home.team?.name || "").trim();
+        const awayTeam = String(away.team?.displayName || away.team?.name || "").trim();
+        const title = String(event.name || `${awayTeam} vs ${homeTeam}`).trim();
+        const endSeconds = Math.floor(startsAt.getTime() / 1000) + estimatedDurationSeconds(title, league.name, league.sport);
+        const nowSeconds = Math.floor(now.getTime() / 1000);
+        if (endSeconds <= nowSeconds) continue;
+        const address = competition.venue?.address || {};
+        const location = [address.city, address.state, address.country].filter(Boolean).join(", ");
+        const venueName = String(competition.venue?.fullName || "").trim();
+        games.push({
+          id: `espn-${league.id.toLowerCase()}-${event.id}`,
+          provider: "espn-schedule",
+          sourceId: String(event.id || ""),
+          title, league: league.name, sport: league.sport,
+          startsAt: startsAt.toISOString(), endsAt: new Date(endSeconds * 1000).toISOString(),
+          status: startsAt.getTime() > now.getTime() ? "upcoming" : "live", is24x7: false,
+          homeTeam, awayTeam,
+          homeLogoUrl: String(home.team?.logo || "").replace(/^http:/, "https:"),
+          awayLogoUrl: String(away.team?.logo || "").replace(/^http:/, "https:"),
+          posterUrl: "", categoryLogoUrl: "", venue: [venueName, location].filter(Boolean).join(" • "), sources: [],
+        });
+      }
+    } catch (error) {
+      console.warn(`Schedule unavailable for ${league.name}: ${String(error)}`);
+    }
+  }
+  return games;
+}
+
+async function inspectStreamCapabilities(source) {
+  if (!source.url) return source;
+  try {
+    const response = await fetch(source.url, {
+      headers: { Accept: "application/dash+xml,application/vnd.apple.mpegurl,application/x-mpegURL,*/*", "User-Agent": "StreamCorner-TV-Feed/1.3" },
+      redirect: "follow", signal: AbortSignal.timeout(12_000),
+    });
+    if (!response.ok) return source;
+    const manifest = await response.text();
+    const heights = [...manifest.matchAll(/(?:height\s*=\s*["'](\d+)["']|RESOLUTION\s*=\s*\d+x(\d+))/gi)]
+      .map((match) => Number(match[1] || match[2] || 0));
+    const maxHeight = Math.max(0, ...heights);
+    const videoRange = /dvhe|dvh1|dolby[ -]?vision/i.test(manifest) ? "DOLBY VISION"
+      : /\bhlg\b|arib-std-b67|transferCharacteristics\s*=\s*["']18["']|VIDEO-RANGE\s*=\s*HLG/i.test(manifest) ? "HLG HDR"
+      : /smpte2084|st2084|transferCharacteristics\s*=\s*["']16["']|VIDEO-RANGE\s*=\s*PQ/i.test(manifest) ? "HDR10/PQ" : "";
+    const audioFormat = /ec\+3|eac3[-_.]?joc|\bjoc\b|dolby[ -]?atmos/i.test(manifest) ? "DOLBY ATMOS"
+      : /ec-3|eac3|e-ac-3/i.test(manifest) ? "DOLBY DIGITAL+" : "";
+    return { ...source, maxHeight, videoRange, audioFormat };
+  } catch {
+    return source;
+  }
 }
 const providerNames = {
   admin: "ADMIN",
@@ -267,7 +348,7 @@ try {
 
   const now = new Date();
   const nowSeconds = Math.floor(now.getTime() / 1000);
-  const games = jobs.map((job, index) => {
+  let games = jobs.map((job, index) => {
     const detail = details[index] || job.row;
     const timestamp = Number(detail.timestamp || job.row.timestamp || 0);
     const startsAt = timestamp > 0 ? new Date(timestamp * 1000).toISOString() : now.toISOString();
@@ -305,9 +386,39 @@ try {
       awayLogoUrl: String(detail.away_team_logo || job.row.away_team_logo || ""),
       posterUrl: String(detail.poster || job.row.poster || ""),
       categoryLogoUrl: String(detail.category_logo || job.row.category_logo || ""),
+      venue: String(detail.venue?.fullName || detail.venue_name || detail.venue || detail.location || job.row.venue || job.row.location || ""),
       sources,
     };
   }).filter((game) => game.status && isSupportedSportsEntry(game));
+
+  const scheduledGames = await fetchMajorLeagueSchedules(now);
+  for (const scheduled of scheduledGames) {
+    const scheduledTeams = [canonicalTeam(scheduled.homeTeam), canonicalTeam(scheduled.awayTeam)].filter(Boolean).sort().join("|");
+    const match = games.find((game) => {
+      const gameTeams = [canonicalTeam(game.homeTeam), canonicalTeam(game.awayTeam)].filter(Boolean).sort().join("|");
+      const closeInTime = Math.abs(Date.parse(game.startsAt) - Date.parse(scheduled.startsAt)) <= 18 * 60 * 60 * 1000;
+      return closeInTime && scheduledTeams && gameTeams === scheduledTeams;
+    });
+    if (match) {
+      match.venue ||= scheduled.venue;
+      match.homeLogoUrl ||= scheduled.homeLogoUrl;
+      match.awayLogoUrl ||= scheduled.awayLogoUrl;
+    } else {
+      games.push(scheduled);
+    }
+  }
+  games.sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt));
+
+  const liveSources = games.filter((game) => game.status === "live").flatMap((game) => game.sources.map((source, index) => ({ game, source, index })));
+  let capabilityIndex = 0;
+  await Promise.all(Array.from({ length: Math.min(8, liveSources.length) }, async () => {
+    while (true) {
+      const jobIndex = capabilityIndex++;
+      if (jobIndex >= liveSources.length) return;
+      const item = liveSources[jobIndex];
+      item.game.sources[item.index] = await inspectStreamCapabilities(item.source);
+    }
+  }));
 
   const directStreams = games.flatMap((game) => game.sources
     .filter((source) => source.url)
