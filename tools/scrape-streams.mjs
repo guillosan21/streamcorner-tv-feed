@@ -58,6 +58,16 @@ const workers = [
 ];
 
 const providers = ["admin", "nba", "nfl", "alpha", "beta", "001", "003"];
+
+function estimatedDurationSeconds(title, league, sport) {
+  const value = `${sport} ${league} ${title}`.toLowerCase();
+  if (/formula|motorsport|racing/.test(value)) return 6 * 60 * 60;
+  if (/golf/.test(value)) return 12 * 60 * 60;
+  if (/cricket|tennis|boxing|ufc|mma|wrestling|darts|snooker|cycling/.test(value)) return 8 * 60 * 60;
+  if (/baseball|mlb|american football|nfl|cfl/.test(value)) return 6 * 60 * 60;
+  if (/basketball|nba|wnba|hockey|nhl|soccer|football/.test(value)) return 4 * 60 * 60;
+  return 8 * 60 * 60;
+}
 const providerNames = {
   admin: "ADMIN",
   nba: "NBA",
@@ -265,6 +275,10 @@ try {
     const league = String(detail.league || detail.category || job.row.league || job.row.category || providerNames[job.provider]);
     const sport = String(detail.category || job.row.category || detail.league || job.row.league || "Sports");
     const is24x7 = /24\s*(?:\/|x)\s*7/i.test(`${title} ${league} ${sport}`);
+    const endSeconds = timestamp > 0 ? timestamp + estimatedDurationSeconds(title, league, sport) : nowSeconds + 8 * 60 * 60;
+    const status = is24x7 || timestamp <= 0 || nowSeconds < endSeconds
+      ? (timestamp > nowSeconds ? "upcoming" : "live")
+      : null;
     const sources = (Array.isArray(detail.streams) ? detail.streams : [])
       .map((source, sourceIndex) => ({
         name: String(source.source_name || `Source ${sourceIndex + 1}`),
@@ -282,7 +296,8 @@ try {
       league,
       sport,
       startsAt,
-      status: timestamp > nowSeconds ? "upcoming" : "live",
+      endsAt: new Date(endSeconds * 1000).toISOString(),
+      status,
       is24x7,
       homeTeam: String(detail.home_team || job.row.home_team || ""),
       awayTeam: String(detail.away_team || job.row.away_team || ""),
@@ -292,7 +307,7 @@ try {
       categoryLogoUrl: String(detail.category_logo || job.row.category_logo || ""),
       sources,
     };
-  }).filter(isSupportedSportsEntry);
+  }).filter((game) => game.status && isSupportedSportsEntry(game));
 
   const directStreams = games.flatMap((game) => game.sources
     .filter((source) => source.url)
