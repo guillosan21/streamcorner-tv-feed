@@ -85,9 +85,11 @@ function canonicalTeam(value) {
 }
 
 async function fetchMajorLeagueSchedules(now) {
+  const historyStart = new Date(now.getTime() - 4 * 24 * 60 * 60 * 1000);
   const end = new Date(now.getTime() + 45 * 24 * 60 * 60 * 1000);
-  const dates = `${compactDate(now)}-${compactDate(end)}`;
+  const dates = `${compactDate(historyStart)}-${compactDate(end)}`;
   const games = [];
+  const scores = [];
   for (const league of scheduleLeagues) {
     try {
       const response = await fetch(`${ESPN_SITE_API}/${league.path}/scoreboard?dates=${dates}&limit=1000`, {
@@ -98,7 +100,6 @@ async function fetchMajorLeagueSchedules(now) {
       for (const event of Array.isArray(payload?.events) ? payload.events : []) {
         const competition = event?.competitions?.[0] || {};
         const scheduleState = String(event?.status?.type?.state || "").toLowerCase();
-        if (scheduleState === "post") continue;
         const startsAt = new Date(event.date);
         if (!Number.isFinite(startsAt.getTime())) continue;
         const competitors = Array.isArray(competition.competitors) ? competition.competitors : [];
@@ -109,10 +110,26 @@ async function fetchMajorLeagueSchedules(now) {
         const title = String(event.name || `${awayTeam} vs ${homeTeam}`).trim();
         const endSeconds = Math.floor(startsAt.getTime() / 1000) + estimatedDurationSeconds(title, league.name, league.sport);
         const nowSeconds = Math.floor(now.getTime() / 1000);
-        if (endSeconds <= nowSeconds) continue;
         const address = competition.venue?.address || {};
         const location = [address.city, address.state, address.country].filter(Boolean).join(", ");
         const venueName = String(competition.venue?.fullName || "").trim();
+        const venue = [venueName, location].filter(Boolean).join(" • ");
+        const homeScore = String(home.score ?? "").trim();
+        const awayScore = String(away.score ?? "").trim();
+        const scoreDetail = String(event?.status?.type?.shortDetail || event?.status?.type?.detail || event?.status?.displayClock || "").trim();
+        if ((scheduleState === "in" || scheduleState === "post") && startsAt >= historyStart) {
+          scores.push({
+            id: `espn-${league.id.toLowerCase()}-${event.id}`,
+            leagueId: league.id, league: league.name, sport: league.sport,
+            startsAt: startsAt.toISOString(), state: scheduleState, statusDetail: scoreDetail,
+            homeTeam, awayTeam, homeScore, awayScore,
+            homeLogoUrl: String(home.team?.logo || "").replace(/^http:/, "https:"),
+            awayLogoUrl: String(away.team?.logo || "").replace(/^http:/, "https:"),
+            venue,
+          });
+        }
+        if (scheduleState === "post") continue;
+        if (endSeconds <= nowSeconds) continue;
         games.push({
           id: `espn-${league.id.toLowerCase()}-${event.id}`,
           provider: "espn-schedule",
@@ -120,17 +137,18 @@ async function fetchMajorLeagueSchedules(now) {
           title, league: league.name, sport: league.sport,
           startsAt: startsAt.toISOString(), endsAt: new Date(endSeconds * 1000).toISOString(),
           status: scheduleState === "in" ? "live" : "upcoming", scheduleState, is24x7: false,
+          scoreboardLeagueId: league.id, homeScore, awayScore, scoreDetail,
           homeTeam, awayTeam,
           homeLogoUrl: String(home.team?.logo || "").replace(/^http:/, "https:"),
           awayLogoUrl: String(away.team?.logo || "").replace(/^http:/, "https:"),
-          posterUrl: "", categoryLogoUrl: "", venue: [venueName, location].filter(Boolean).join(" • "), sources: [],
+          posterUrl: "", categoryLogoUrl: "", venue, sources: [],
         });
       }
     } catch (error) {
       console.warn(`Schedule unavailable for ${league.name}: ${String(error)}`);
     }
   }
-  return games;
+  return { games, scores };
 }
 
 async function inspectStreamCapabilities(source) {
@@ -399,7 +417,8 @@ try {
     };
   }).filter((game) => game.status && isSupportedSportsEntry(game));
 
-  const scheduledGames = await fetchMajorLeagueSchedules(now);
+  const schedule = await fetchMajorLeagueSchedules(now);
+  const scheduledGames = schedule.games;
   const matchedSourceGames = new Set();
   for (const scheduled of scheduledGames) {
     const scheduledTeams = [canonicalTeam(scheduled.homeTeam), canonicalTeam(scheduled.awayTeam)].filter(Boolean).sort().join("|");
@@ -415,6 +434,10 @@ try {
       match.awayLogoUrl ||= scheduled.awayLogoUrl;
       match.scheduleState = scheduled.scheduleState;
       match.status = scheduled.status;
+      match.scoreboardLeagueId = scheduled.scoreboardLeagueId;
+      match.homeScore = scheduled.homeScore;
+      match.awayScore = scheduled.awayScore;
+      match.scoreDetail = scheduled.scoreDetail;
     } else {
       games.push(scheduled);
     }
@@ -449,6 +472,7 @@ try {
     catalogCounts,
     teams: teamCatalog.teams,
     games,
+    scores: schedule.scores,
   };
   const scrape = {
     scrapedAt: now.toISOString(),
@@ -475,6 +499,8 @@ try {
       m3u8Count: m3u8.length,
       decoderUrl,
       teamCount: teamCatalog.teams.length,
+      scoreCount: schedule.scores.length,
+      liveScoreCount: schedule.scores.filter((score) => score.state === "in").length,
       teamCatalogErrors: teamCatalog.errors,
     }, null, 2)}\n`, "utf8");
   }
@@ -486,6 +512,8 @@ try {
     m3u8Count: m3u8.length,
     decoderUrl,
     teamCount: teamCatalog.teams.length,
+    scoreCount: schedule.scores.length,
+    liveScoreCount: schedule.scores.filter((score) => score.state === "in").length,
     teamCatalogErrors: teamCatalog.errors,
     feedOutput: APP_FEED_OUTPUT,
     scrapeOutput: SCRAPE_OUTPUT,
