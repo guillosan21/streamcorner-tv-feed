@@ -85,6 +85,26 @@ function canonicalTeam(value) {
     .replace(/\b(fc|cf|afc|club|town)\b/g, " ").replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+function isMissingVenue(value) {
+  return !String(value || "").trim() || /^(?:venue\s+)?tba$/i.test(String(value).trim());
+}
+
+async function fetchEspnEventVenue(league, eventId) {
+  try {
+    const response = await fetch(`${ESPN_SITE_API}/${league.path}/summary?event=${encodeURIComponent(eventId)}`, {
+      headers: { Accept: "application/json", "User-Agent": "StreamCorner-TV-Feed/1.3" }, signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) return "";
+    const payload = await response.json();
+    const venueData = payload?.header?.competitions?.[0]?.venue || payload?.gameInfo?.venue || {};
+    const address = venueData.address || {};
+    const location = [address.city, address.state, address.country].filter(Boolean).join(", ");
+    return [String(venueData.fullName || "").trim(), location].filter(Boolean).join(" • ");
+  } catch {
+    return "";
+  }
+}
+
 async function fetchMajorLeagueSchedules(now) {
   const historyStart = new Date(now.getTime() - 4 * 24 * 60 * 60 * 1000);
   const end = new Date(now.getTime() + 45 * 24 * 60 * 60 * 1000);
@@ -115,7 +135,10 @@ async function fetchMajorLeagueSchedules(now) {
         const address = competition.venue?.address || {};
         const location = [address.city, address.state, address.country].filter(Boolean).join(", ");
         const venueName = String(competition.venue?.fullName || "").trim();
-        const venue = [venueName, location].filter(Boolean).join(" • ");
+        let venue = [venueName, location].filter(Boolean).join(" • ");
+        if (isMissingVenue(venue) && event.id && homeTeam && awayTeam && !/\btbd\b/i.test(`${homeTeam} ${awayTeam}`)) {
+          venue = await fetchEspnEventVenue(league, event.id) || venue;
+        }
         const homeScore = String(home.score ?? "").trim();
         const awayScore = String(away.score ?? "").trim();
         const scoreDetail = String(event?.status?.type?.shortDetail || event?.status?.type?.detail || event?.status?.displayClock || "").trim();
@@ -437,7 +460,7 @@ try {
     if (matches.length) {
       for (const match of matches) {
         matchedSourceGames.add(match.id);
-        match.venue ||= scheduled.venue;
+        if (isMissingVenue(match.venue) && !isMissingVenue(scheduled.venue)) match.venue = scheduled.venue;
         match.homeLogoUrl ||= scheduled.homeLogoUrl;
         match.awayLogoUrl ||= scheduled.awayLogoUrl;
         match.scheduleState = scheduled.scheduleState;
