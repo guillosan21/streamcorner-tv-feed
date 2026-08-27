@@ -427,8 +427,12 @@ try {
     const scheduledTeams = [canonicalTeam(scheduled.homeTeam), canonicalTeam(scheduled.awayTeam)].filter(Boolean).sort().join("|");
     const matches = games.filter((game) => {
       const gameTeams = [canonicalTeam(game.homeTeam), canonicalTeam(game.awayTeam)].filter(Boolean).sort().join("|");
+      const normalizedTitle = canonicalTeam(game.title);
+      const titleMatches = canonicalTeam(scheduled.homeTeam) && canonicalTeam(scheduled.awayTeam)
+        && normalizedTitle.includes(canonicalTeam(scheduled.homeTeam))
+        && normalizedTitle.includes(canonicalTeam(scheduled.awayTeam));
       const closeInTime = Math.abs(Date.parse(game.startsAt) - Date.parse(scheduled.startsAt)) <= 6 * 60 * 60 * 1000;
-      return !matchedSourceGames.has(game.id) && closeInTime && scheduledTeams && gameTeams === scheduledTeams;
+      return !matchedSourceGames.has(game.id) && closeInTime && scheduledTeams && (gameTeams === scheduledTeams || titleMatches);
     });
     if (matches.length) {
       for (const match of matches) {
