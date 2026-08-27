@@ -81,7 +81,8 @@ function compactDate(date) {
 
 function canonicalTeam(value) {
   return String(value || "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()
-    .replace(/\b(fc|cf|afc|club)\b/g, " ").replace(/[^a-z0-9]+/g, " ").trim();
+    .replace(/\bathletic bilbao\b/g, "athletic")
+    .replace(/\b(fc|cf|afc|club|town)\b/g, " ").replace(/[^a-z0-9]+/g, " ").trim();
 }
 
 async function fetchMajorLeagueSchedules(now) {
@@ -90,6 +91,7 @@ async function fetchMajorLeagueSchedules(now) {
   const dates = `${compactDate(historyStart)}-${compactDate(end)}`;
   const games = [];
   const scores = [];
+  const completed = [];
   for (const league of scheduleLeagues) {
     try {
       const response = await fetch(`${ESPN_SITE_API}/${league.path}/scoreboard?dates=${dates}&limit=1000`, {
@@ -117,20 +119,7 @@ async function fetchMajorLeagueSchedules(now) {
         const homeScore = String(home.score ?? "").trim();
         const awayScore = String(away.score ?? "").trim();
         const scoreDetail = String(event?.status?.type?.shortDetail || event?.status?.type?.detail || event?.status?.displayClock || "").trim();
-        if ((scheduleState === "in" || scheduleState === "post") && startsAt >= historyStart) {
-          scores.push({
-            id: `espn-${league.id.toLowerCase()}-${event.id}`,
-            leagueId: league.id, league: league.name, sport: league.sport,
-            startsAt: startsAt.toISOString(), state: scheduleState, statusDetail: scoreDetail,
-            homeTeam, awayTeam, homeScore, awayScore,
-            homeLogoUrl: String(home.team?.logo || "").replace(/^http:/, "https:"),
-            awayLogoUrl: String(away.team?.logo || "").replace(/^http:/, "https:"),
-            venue,
-          });
-        }
-        if (scheduleState === "post") continue;
-        if (endSeconds <= nowSeconds) continue;
-        games.push({
+        const scheduledGame = {
           id: `espn-${league.id.toLowerCase()}-${event.id}`,
           provider: "espn-schedule",
           sourceId: String(event.id || ""),
@@ -142,13 +131,27 @@ async function fetchMajorLeagueSchedules(now) {
           homeLogoUrl: String(home.team?.logo || "").replace(/^http:/, "https:"),
           awayLogoUrl: String(away.team?.logo || "").replace(/^http:/, "https:"),
           posterUrl: "", categoryLogoUrl: "", venue, sources: [],
-        });
+        };
+        if ((scheduleState === "in" || scheduleState === "post") && startsAt >= historyStart) {
+          scores.push({
+            id: `espn-${league.id.toLowerCase()}-${event.id}`,
+            leagueId: league.id, league: league.name, sport: league.sport,
+            startsAt: startsAt.toISOString(), state: scheduleState, statusDetail: scoreDetail,
+            homeTeam, awayTeam, homeScore, awayScore,
+            homeLogoUrl: String(home.team?.logo || "").replace(/^http:/, "https:"),
+            awayLogoUrl: String(away.team?.logo || "").replace(/^http:/, "https:"),
+            venue,
+          });
+        }
+        if (scheduleState === "post") { completed.push(scheduledGame); continue; }
+        if (endSeconds <= nowSeconds) continue;
+        games.push(scheduledGame);
       }
     } catch (error) {
       console.warn(`Schedule unavailable for ${league.name}: ${String(error)}`);
     }
   }
-  return { games, scores };
+  return { games, scores, completed };
 }
 
 async function inspectStreamCapabilities(source) {
@@ -418,30 +421,33 @@ try {
   }).filter((game) => game.status && isSupportedSportsEntry(game));
 
   const schedule = await fetchMajorLeagueSchedules(now);
-  const scheduledGames = schedule.games;
+  const scheduledGames = [...schedule.games, ...schedule.completed];
   const matchedSourceGames = new Set();
   for (const scheduled of scheduledGames) {
     const scheduledTeams = [canonicalTeam(scheduled.homeTeam), canonicalTeam(scheduled.awayTeam)].filter(Boolean).sort().join("|");
-    const match = games.find((game) => {
+    const matches = games.filter((game) => {
       const gameTeams = [canonicalTeam(game.homeTeam), canonicalTeam(game.awayTeam)].filter(Boolean).sort().join("|");
       const closeInTime = Math.abs(Date.parse(game.startsAt) - Date.parse(scheduled.startsAt)) <= 6 * 60 * 60 * 1000;
       return !matchedSourceGames.has(game.id) && closeInTime && scheduledTeams && gameTeams === scheduledTeams;
     });
-    if (match) {
-      matchedSourceGames.add(match.id);
-      match.venue ||= scheduled.venue;
-      match.homeLogoUrl ||= scheduled.homeLogoUrl;
-      match.awayLogoUrl ||= scheduled.awayLogoUrl;
-      match.scheduleState = scheduled.scheduleState;
-      match.status = scheduled.status;
-      match.scoreboardLeagueId = scheduled.scoreboardLeagueId;
-      match.homeScore = scheduled.homeScore;
-      match.awayScore = scheduled.awayScore;
-      match.scoreDetail = scheduled.scoreDetail;
-    } else {
+    if (matches.length) {
+      for (const match of matches) {
+        matchedSourceGames.add(match.id);
+        match.venue ||= scheduled.venue;
+        match.homeLogoUrl ||= scheduled.homeLogoUrl;
+        match.awayLogoUrl ||= scheduled.awayLogoUrl;
+        match.scheduleState = scheduled.scheduleState;
+        match.status = scheduled.status;
+        match.scoreboardLeagueId = scheduled.scoreboardLeagueId;
+        match.homeScore = scheduled.homeScore;
+        match.awayScore = scheduled.awayScore;
+        match.scoreDetail = scheduled.scoreDetail;
+      }
+    } else if (scheduled.scheduleState !== "post") {
       games.push(scheduled);
     }
   }
+  games = games.filter((game) => game.scheduleState !== "post");
   games.sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt));
 
   const liveSources = games.filter((game) => game.status === "live").flatMap((game) => game.sources.map((source, index) => ({ game, source, index })));
