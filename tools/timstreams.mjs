@@ -95,7 +95,9 @@ async function resolveStream(stream, event, verifyLive) {
     name: `TimStreams • ${String(stream?.name || "Live feed").trim()}`,
     url: "",
     clearKey: "",
-    embedUrl: watchUrl,
+    // Keep each channel's provider player URL. Reusing the event watch URL for
+    // every channel caused source deduplication to collapse an entire list to one.
+    embedUrl,
     headers: { Referer: TIMSTREAMS_SITE },
   };
 }

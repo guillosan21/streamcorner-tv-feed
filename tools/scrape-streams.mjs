@@ -84,6 +84,7 @@ function compactDate(date) {
 function canonicalTeam(value) {
   return String(value || "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()
     .replace(/\bchiacgo\b/g, "chicago")
+    .replace(/\bman city\b/g, "manchester city")
     .replace(/\bmunchen\b/g, "munich")
     .replace(/\bvfb\b/g, " ")
     .replace(/\breal racing club\b/g, "racing santander")
@@ -99,7 +100,7 @@ function normalizeLeagueLabel(value) {
 function eventSides(game) {
   if (game.homeTeam && game.awayTeam) return [canonicalTeam(game.homeTeam), canonicalTeam(game.awayTeam)];
   const pieces = String(game.title || "").split("|")[0]
-    .split(/\s+(?:vs\.?|versus|at|@|-|–|—)\s+/i)
+    .split(/\s+(?:v(?:s)?\.?|versus|at|@|-|–|—)\s+/i)
     .map(canonicalTeam).filter(Boolean);
   return pieces.length >= 2 ? pieces.slice(-2) : [];
 }
