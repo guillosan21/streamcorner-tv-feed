@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { fetchTimStreamsGames } from "./timstreams.mjs";
 
 const SITE_URL = "https://streamcorner.st/";
 const DEFAULT_DECODER_URL = "https://streamcorner.st/assets/BjKHyKrh.js";
@@ -181,7 +182,7 @@ async function inspectStreamCapabilities(source) {
   if (!source.url) return source;
   try {
     const response = await fetch(source.url, {
-      headers: { Accept: "application/dash+xml,application/vnd.apple.mpegurl,application/x-mpegURL,*/*", "User-Agent": "StreamCorner-TV-Feed/1.3" },
+      headers: { Accept: "application/dash+xml,application/vnd.apple.mpegurl,application/x-mpegURL,*/*", "User-Agent": "StreamCorner-TV-Feed/1.5", ...(source.headers || {}) },
       redirect: "follow", signal: AbortSignal.timeout(12_000),
     });
     if (!response.ok) return source;
@@ -443,6 +444,11 @@ try {
     };
   }).filter((game) => game.status && isSupportedSportsEntry(game));
 
+  const timStreams = await fetchTimStreamsGames(now, estimatedDurationSeconds);
+  catalogCounts.timstreams = timStreams.catalogCount;
+  if (timStreams.error) console.warn(`TimStreams unavailable: ${timStreams.error}`);
+  games.push(...timStreams.games.filter(isSupportedSportsEntry));
+
   const schedule = await fetchMajorLeagueSchedules(now);
   const scheduledGames = [...schedule.games, ...schedule.completed];
   const matchedSourceGames = new Set();
@@ -455,7 +461,8 @@ try {
         && normalizedTitle.includes(canonicalTeam(scheduled.homeTeam))
         && normalizedTitle.includes(canonicalTeam(scheduled.awayTeam));
       const closeInTime = Math.abs(Date.parse(game.startsAt) - Date.parse(scheduled.startsAt)) <= 6 * 60 * 60 * 1000;
-      return !matchedSourceGames.has(game.id) && closeInTime && scheduledTeams && (gameTeams === scheduledTeams || titleMatches);
+      const sameExternalId = game.sourceId && scheduled.sourceId && String(game.sourceId) === String(scheduled.sourceId);
+      return !matchedSourceGames.has(game.id) && closeInTime && scheduledTeams && (sameExternalId || gameTeams === scheduledTeams || titleMatches);
     });
     if (matches.length) {
       for (const match of matches) {
@@ -510,6 +517,8 @@ try {
   const scrape = {
     scrapedAt: now.toISOString(),
     decoderUrl,
+    timStreamsApiUrl: timStreams.apiUrl,
+    timStreamsResolvedStreamCount: timStreams.resolvedStreamCount,
     catalogCounts,
     gameCount: games.length,
     directStreamCount: directStreams.length,
@@ -531,6 +540,7 @@ try {
       directStreamCount: directStreams.length,
       m3u8Count: m3u8.length,
       decoderUrl,
+      timStreamsResolvedStreamCount: timStreams.resolvedStreamCount,
       teamCount: teamCatalog.teams.length,
       scoreCount: schedule.scores.length,
       liveScoreCount: schedule.scores.filter((score) => score.state === "in").length,
@@ -544,6 +554,7 @@ try {
     directStreamCount: directStreams.length,
     m3u8Count: m3u8.length,
     decoderUrl,
+    timStreamsResolvedStreamCount: timStreams.resolvedStreamCount,
     teamCount: teamCatalog.teams.length,
     scoreCount: schedule.scores.length,
     liveScoreCount: schedule.scores.filter((score) => score.state === "in").length,
