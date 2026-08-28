@@ -87,6 +87,10 @@ function canonicalTeam(value) {
     .replace(/\b(fc|cf|afc|club|town)\b/g, " ").replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+function normalizeLeagueLabel(value) {
+  return String(value || "").trim().replace(/^(?:2\.\s*Bundesliga|Bundesliga\s*2)$/i, "Bundesliga");
+}
+
 function eventSides(game) {
   if (game.homeTeam && game.awayTeam) return [canonicalTeam(game.homeTeam), canonicalTeam(game.awayTeam)];
   const pieces = String(game.title || "").split("|")[0]
@@ -482,7 +486,7 @@ try {
     const timestamp = Number(detail.timestamp || job.row.timestamp || 0);
     const startsAt = timestamp > 0 ? new Date(timestamp * 1000).toISOString() : now.toISOString();
     const title = String(detail.event_name || job.row.event_name || detail.title || job.row.title || `${providerNames[job.provider]} ${job.id}`);
-    const league = String(detail.league || detail.category || job.row.league || job.row.category || providerNames[job.provider]);
+    const league = normalizeLeagueLabel(detail.league || detail.category || job.row.league || job.row.category || providerNames[job.provider]);
     const sport = String(detail.category || job.row.category || detail.league || job.row.league || "Sports");
     const is24x7 = /24\s*(?:\/|x)\s*7/i.test(`${title} ${league} ${sport}`);
     const endSeconds = timestamp > 0 ? timestamp + estimatedDurationSeconds(title, league, sport) : nowSeconds + 8 * 60 * 60;
@@ -494,12 +498,15 @@ try {
         const rawUrl = String(source.stream_url || "").trim();
         const directUrl = /\.(?:m3u8|mpd)(?:$|[?#&])/i.test(rawUrl) ? rawUrl : "";
         const embedUrl = String(source.embed_url || (!directUrl ? rawUrl : "")).trim();
+        const directHost = runCatchingUrlHost(directUrl);
         const embedHost = runCatchingUrlHost(embedUrl);
+        const isTimDirect = directHost.endsWith(".aiv-cdn.net") || directHost.endsWith(".pv-cdn.net") ||
+          directHost === "timstreams.st" || directHost.endsWith(".timstreams.st");
         const isPpvWeb = !directUrl && (embedHost === "embedindia.st" || embedHost.endsWith(".embedindia.st") ||
           embedHost.endsWith(".ppvservices.st") || embedHost.endsWith(".pandecocogaming.sbs"));
         const channelName = String(source.source_name || `Source ${sourceIndex + 1}`).replace(/^(?:StreamCorner|PPV)\s*[•|-]\s*/i, "");
         return {
-          name: `${isPpvWeb ? "PPV" : "StreamCorner"} • ${channelName}`,
+          name: `${isTimDirect ? "TimStreams" : isPpvWeb ? "PPV" : "StreamCorner"} • ${channelName}`,
           url: directUrl,
           clearKey: directUrl ? String(source.stream_keys || "") : "",
           embedUrl,
