@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { fetchTimStreamsGames } from "./timstreams.mjs";
+import { fetchPpvGames } from "./ppvstreams.mjs";
 
 const SITE_URL = "https://streamcorner.st/";
 const DEFAULT_DECODER_URL = "https://streamcorner.st/assets/BjKHyKrh.js";
@@ -448,6 +449,10 @@ try {
   catalogCounts.timstreams = timStreams.catalogCount;
   if (timStreams.error) console.warn(`TimStreams unavailable: ${timStreams.error}`);
   games.push(...timStreams.games.filter(isSupportedSportsEntry));
+  const ppv = await fetchPpvGames(now);
+  catalogCounts.ppv = ppv.catalogCount;
+  if (ppv.error) console.warn(`PPV unavailable: ${ppv.error}`);
+  games.push(...ppv.games.filter(isSupportedSportsEntry));
 
   const schedule = await fetchMajorLeagueSchedules(now);
   const scheduledGames = [...schedule.games, ...schedule.completed];
@@ -519,6 +524,8 @@ try {
     decoderUrl,
     timStreamsApiUrl: timStreams.apiUrl,
     timStreamsResolvedStreamCount: timStreams.resolvedStreamCount,
+    ppvApiUrl: ppv.apiUrl,
+    ppvPlayableCount: ppv.playableCount,
     catalogCounts,
     gameCount: games.length,
     directStreamCount: directStreams.length,
@@ -541,6 +548,7 @@ try {
       m3u8Count: m3u8.length,
       decoderUrl,
       timStreamsResolvedStreamCount: timStreams.resolvedStreamCount,
+      ppvPlayableCount: ppv.playableCount,
       teamCount: teamCatalog.teams.length,
       scoreCount: schedule.scores.length,
       liveScoreCount: schedule.scores.filter((score) => score.state === "in").length,
@@ -555,6 +563,7 @@ try {
     m3u8Count: m3u8.length,
     decoderUrl,
     timStreamsResolvedStreamCount: timStreams.resolvedStreamCount,
+    ppvPlayableCount: ppv.playableCount,
     teamCount: teamCatalog.teams.length,
     scoreCount: schedule.scores.length,
     liveScoreCount: schedule.scores.filter((score) => score.state === "in").length,
