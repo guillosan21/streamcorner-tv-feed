@@ -1,5 +1,6 @@
 const TIMSTREAMS_API = "https://timstreams.st/api";
 const TIMSTREAMS_SITE = "https://timstreams.st/";
+const TIMSTREAMS_API_ORIGINS = ["https://timstreams.st", "https://timst.cfd"];
 const TIMSTREAMS_TIME_ZONE = "America/New_York";
 
 function parseWallClock(value, timeZone = TIMSTREAMS_TIME_ZONE) {
@@ -125,13 +126,33 @@ function canonicalLeague(rawLeague, sport, title) {
 
 export async function fetchTimStreamsGames(now, estimatedDurationSeconds) {
   try {
-    const response = await fetch(`${TIMSTREAMS_API}/live-upcoming?updated=${Date.now()}`, {
-      headers: { Accept: "application/json", "User-Agent": "StreamCorner-TV-Feed/1.5" },
-      signal: AbortSignal.timeout(20_000),
-    });
-    if (!response.ok) throw new Error(`catalog returned HTTP ${response.status}`);
-    const payload = await response.json();
-    const events = Array.isArray(payload?.events) ? payload.events : [];
+    let payload = null;
+    let apiUrl = `${TIMSTREAMS_API}/live-upcoming`;
+    const errors = [];
+    // The catalog backend briefly emits {events:null} while rotating schedules.
+    // Retry both owner-published domains instead of publishing an empty feed.
+    for (let attempt = 0; attempt < 4 && !Array.isArray(payload?.events); attempt += 1) {
+      const origin = TIMSTREAMS_API_ORIGINS[attempt % TIMSTREAMS_API_ORIGINS.length];
+      apiUrl = `${origin}/api/live-upcoming`;
+      try {
+        const response = await fetch(`${apiUrl}?updated=${Date.now()}-${attempt}`, {
+          headers: {
+            Accept: "application/json", Referer: `${origin}/streams`,
+            "User-Agent": "Mozilla/5.0 (compatible; StreamCorner-TV-Feed/1.23)",
+          },
+          signal: AbortSignal.timeout(20_000),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        payload = await response.json();
+        if (!Array.isArray(payload?.events)) throw new Error("catalog is rotating (events is not an array)");
+      } catch (error) {
+        errors.push(`${origin}: ${String(error)}`);
+        payload = null;
+        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 750 * (attempt + 1)));
+      }
+    }
+    if (!Array.isArray(payload?.events)) throw new Error(errors.join("; ") || "catalog did not return events");
+    const events = payload.events;
     const genres = new Map((Array.isArray(payload?.genres) ? payload.genres : []).map((genre) => [String(genre.id), genre]));
     const eligible = events.filter((event) => event?.vip !== true && !["17", "18"].includes(String(event?.genre)));
     const resolved = new Array(eligible.length);
@@ -181,7 +202,7 @@ export async function fetchTimStreamsGames(now, estimatedDurationSeconds) {
       games,
       catalogCount: events.length,
       resolvedStreamCount: games.flatMap((game) => game.sources).length,
-      apiUrl: `${TIMSTREAMS_API}/live-upcoming`,
+      apiUrl,
       error: "",
     };
   } catch (error) {

@@ -213,6 +213,33 @@ function sourceProvenanceErrors(rows) {
   return errors;
 }
 
+function collapsePpvMirrors(rows) {
+  let removed = 0;
+  for (const game of rows) {
+    const ppvSources = (game.sources || []).filter((source) => source.provider === "PPV");
+    if (ppvSources.length <= 1) continue;
+    const canonical = [...ppvSources].sort((first, second) => {
+      const priority = (source) => {
+        const host = runCatchingUrlHost(source.embedUrl);
+        const canonicalPath = /^https:\/\/embedindia\.st\/embed\//i.test(String(source.embedUrl || ""));
+        return (canonicalPath ? 8 : 0) + (host === "embedindia.st" ? 4 : 0) +
+          (!/\bstream\s*\d+\b/i.test(String(source.name || "")) ? 2 : 0);
+      };
+      return priority(second) - priority(first);
+    })[0];
+    let inserted = false;
+    game.sources = game.sources.filter((source) => {
+      if (source.provider !== "PPV") return true;
+      if (!inserted && source === canonical) { inserted = true; return true; }
+      return false;
+    });
+    // Preserve provider ordering when the canonical entry originally followed a mirror.
+    if (!inserted) game.sources.push(canonical);
+    removed += ppvSources.length - 1;
+  }
+  return removed;
+}
+
 function isMissingVenue(value) {
   return !String(value || "").trim() || /^(?:venue\s+)?tba$/i.test(String(value).trim());
 }
@@ -672,6 +699,7 @@ try {
     }
   }
   games = deduplicateFeedGames(games.filter((game) => game.scheduleState !== "post"));
+  const collapsedPpvMirrorCount = collapsePpvMirrors(games);
   const duplicateEventPairCount = countRemainingDuplicatePairs(games);
   if (duplicateEventPairCount > 0) throw new Error(`feed still contains ${duplicateEventPairCount} mergeable duplicate event pair(s)`);
   games.sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt));
@@ -746,6 +774,7 @@ try {
       liveScoreCount: schedule.scores.filter((score) => score.state === "in").length,
       duplicateEventPairCount,
       sourceProvenanceErrorCount: provenanceErrors.length,
+      collapsedPpvMirrorCount,
       teamCatalogErrors: teamCatalog.errors,
     }, null, 2)}\n`, "utf8");
   }
@@ -763,6 +792,7 @@ try {
     liveScoreCount: schedule.scores.filter((score) => score.state === "in").length,
     duplicateEventPairCount,
     sourceProvenanceErrorCount: provenanceErrors.length,
+    collapsedPpvMirrorCount,
     teamCatalogErrors: teamCatalog.errors,
     feedOutput: APP_FEED_OUTPUT,
     scrapeOutput: SCRAPE_OUTPUT,
