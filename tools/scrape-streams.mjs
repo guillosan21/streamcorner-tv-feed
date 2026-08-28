@@ -177,6 +177,42 @@ function countRemainingDuplicatePairs(rows) {
   return count;
 }
 
+function inferredWebProvider(embedUrl) {
+  const host = runCatchingUrlHost(embedUrl);
+  if (!host) return "";
+  if (host === "timstreams.st" || host.endsWith(".timstreams.st") || /^cdx-\d+\.website$/.test(host)) return "TimStreams";
+  if (host === "ppv.st" || host.endsWith(".ppv.st") ||
+      host === "embedindia.st" || host.endsWith(".embedindia.st") ||
+      host === "embedhd.st" || host.endsWith(".embedhd.st") ||
+      host.endsWith(".ppvservices.st") || host.endsWith(".pandecocogaming.sbs") ||
+      host.endsWith(".getsugatensho.sbs")) return "PPV";
+  return "";
+}
+
+function sourceProvenanceErrors(rows) {
+  const errors = [];
+  for (const game of rows) {
+    for (const source of game.sources || []) {
+      const provider = String(source.provider || "");
+      const embedProvider = String(source.embedProvider || "");
+      const inferred = inferredWebProvider(source.embedUrl);
+      if (!["StreamCorner", "TimStreams", "PPV"].includes(provider)) {
+        errors.push(`${game.id}: invalid provider ${provider || "<empty>"}`);
+      }
+      if (!String(source.name || "").startsWith(`${provider} • `)) {
+        errors.push(`${game.id}: label ${source.name || "<empty>"} disagrees with ${provider || "<empty>"}`);
+      }
+      if (inferred && embedProvider !== inferred) {
+        errors.push(`${game.id}: ${source.embedUrl} has embedProvider=${embedProvider || "<empty>"}, expected ${inferred}`);
+      }
+      if (!source.url && inferred && provider !== inferred) {
+        errors.push(`${game.id}: web source provider=${provider || "<empty>"}, expected ${inferred}`);
+      }
+    }
+  }
+  return errors;
+}
+
 function isMissingVenue(value) {
   return !String(value || "").trim() || /^(?:venue\s+)?tba$/i.test(String(value).trim());
 }
@@ -241,7 +277,9 @@ async function fetchMajorLeagueSchedules(now) {
           title, league: league.name, sport: league.sport,
           startsAt: startsAt.toISOString(), endsAt: new Date(endSeconds * 1000).toISOString(),
           status: scheduleState === "in" ? "live" : "upcoming", scheduleState, is24x7: false,
-          scoreboardLeagueId: league.id, homeScore, awayScore, scoreDetail,
+          scoreboardLeagueId: league.id,
+          scoreboardEventId: event.id ? `espn-${league.id.toLowerCase()}-${event.id}` : "",
+          homeScore, awayScore, scoreDetail,
           homeTeam, awayTeam,
           homeLogoUrl: String(home.team?.logo || "").replace(/^http:/, "https:"),
           awayLogoUrl: String(away.team?.logo || "").replace(/^http:/, "https:"),
@@ -600,9 +638,11 @@ try {
       const titleMatches = canonicalTeam(scheduled.homeTeam) && canonicalTeam(scheduled.awayTeam)
         && normalizedTitle.includes(canonicalTeam(scheduled.homeTeam))
         && normalizedTitle.includes(canonicalTeam(scheduled.awayTeam));
-      const closeInTime = Math.abs(Date.parse(game.startsAt) - Date.parse(scheduled.startsAt)) <= 6 * 60 * 60 * 1000;
+      // Names alone are unsafe for doubleheaders and same-day rematches. ESPN IDs
+      // are exact; provider-title fallback is deliberately limited to clock rounding.
+      const closeInTime = Math.abs(Date.parse(game.startsAt) - Date.parse(scheduled.startsAt)) <= 45 * 60 * 1000;
       const sameExternalId = game.sourceId && scheduled.sourceId && String(game.sourceId) === String(scheduled.sourceId);
-      return !matchedSourceGames.has(game.id) && closeInTime && scheduledTeams && (sameExternalId || gameTeams === scheduledTeams || titleMatches);
+      return !matchedSourceGames.has(game.id) && scheduledTeams && (sameExternalId || (closeInTime && (gameTeams === scheduledTeams || titleMatches)));
     });
     if (matches.length) {
       for (const match of matches) {
@@ -622,6 +662,7 @@ try {
         match.scheduleState = scheduled.scheduleState;
         match.status = scheduled.status;
         match.scoreboardLeagueId = scheduled.scoreboardLeagueId;
+        match.scoreboardEventId = scheduled.scoreboardEventId;
         match.homeScore = scheduled.homeScore;
         match.awayScore = scheduled.awayScore;
         match.scoreDetail = scheduled.scoreDetail;
@@ -646,6 +687,10 @@ try {
     }
   }));
   games.forEach((game) => { game.sources = game.sources.filter(Boolean); });
+  const provenanceErrors = sourceProvenanceErrors(games);
+  if (provenanceErrors.length) {
+    throw new Error(`source provenance validation failed (${provenanceErrors.length}): ${provenanceErrors.slice(0, 5).join("; ")}`);
+  }
 
   const directStreams = games.flatMap((game) => game.sources
     .filter((source) => source.url)
@@ -700,6 +745,7 @@ try {
       scoreCount: schedule.scores.length,
       liveScoreCount: schedule.scores.filter((score) => score.state === "in").length,
       duplicateEventPairCount,
+      sourceProvenanceErrorCount: provenanceErrors.length,
       teamCatalogErrors: teamCatalog.errors,
     }, null, 2)}\n`, "utf8");
   }
@@ -716,6 +762,7 @@ try {
     scoreCount: schedule.scores.length,
     liveScoreCount: schedule.scores.filter((score) => score.state === "in").length,
     duplicateEventPairCount,
+    sourceProvenanceErrorCount: provenanceErrors.length,
     teamCatalogErrors: teamCatalog.errors,
     feedOutput: APP_FEED_OUTPUT,
     scrapeOutput: SCRAPE_OUTPUT,
