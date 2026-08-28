@@ -55,17 +55,45 @@ function decodeEmbedPayload(html) {
   return findHlsUrl(decoded);
 }
 
-async function resolveStream(stream) {
+function safeWatchUrl(event) {
+  const slug = String(event?.url || "").trim().replace(/^\/+|\/+$/g, "").replace(/^watch\//, "");
+  if (!slug || /(?:^|\/)\.\.(?:\/|$)/.test(slug)) return "";
+  try {
+    const url = new URL(`/watch/${slug}`, TIMSTREAMS_SITE);
+    return url.protocol === "https:" && url.host === "timstreams.st" ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
+async function resolveStream(stream, event, verifyLive) {
   const embedUrl = String(stream?.url || "").trim();
-  if (!embedUrl.startsWith("https://") || stream?.vip === true) return null;
-  // The decoded HLS URL is deliberately short-lived and can rotate before a free
-  // GitHub Actions refresh completes. The provider player resolves it at playback
-  // time, so publish that stable entry point instead of a soon-stale manifest.
+  const watchUrl = safeWatchUrl(event);
+  if (!embedUrl.startsWith("https://") || !watchUrl || stream?.vip === true) return null;
+  if (verifyLive) {
+    try {
+      const response = await fetch(embedUrl, {
+        headers: { Accept: "text/html", Referer: TIMSTREAMS_SITE, "User-Agent": "StreamCorner-TV-Feed/1.13" },
+        redirect: "follow", signal: AbortSignal.timeout(15_000),
+      });
+      if (!response.ok) return null;
+      const manifestUrl = decodeEmbedPayload(await response.text());
+      if (!manifestUrl) return null;
+      const referer = `${new URL(response.url || embedUrl).origin}/`;
+      const manifestResponse = await fetch(manifestUrl, {
+        headers: { Accept: "application/vnd.apple.mpegurl,application/x-mpegURL,*/*", Referer: referer, Origin: new URL(referer).origin },
+        redirect: "follow", signal: AbortSignal.timeout(12_000),
+      });
+      if (!manifestResponse.ok || !(await manifestResponse.text()).trimStart().startsWith("#EXTM3U")) return null;
+    } catch {
+      return null;
+    }
+  }
   return {
     name: `TimStreams • ${String(stream?.name || "Live feed").trim()}`,
     url: "",
     clearKey: "",
-    embedUrl,
+    embedUrl: watchUrl,
     headers: { Referer: TIMSTREAMS_SITE },
   };
 }
@@ -109,7 +137,10 @@ export async function fetchTimStreamsGames(now, estimatedDurationSeconds) {
         const index = nextIndex++;
         if (index >= eligible.length) return;
         const event = eligible[index];
-        const streams = await Promise.all((Array.isArray(event?.streams) ? event.streams : []).map(resolveStream));
+        const startsAt = parseWallClock(event?.time) || now;
+        const verifyLive = startsAt.getTime() <= now.getTime();
+        const streams = await Promise.all((Array.isArray(event?.streams) ? event.streams : [])
+          .map((stream) => resolveStream(stream, event, verifyLive)));
         resolved[index] = streams.filter(Boolean);
       }
     }));
@@ -154,4 +185,4 @@ export async function fetchTimStreamsGames(now, estimatedDurationSeconds) {
   }
 }
 
-export const __testing = { parseWallClock, decodeEmbedPayload };
+export const __testing = { parseWallClock, decodeEmbedPayload, safeWatchUrl };

@@ -179,15 +179,34 @@ async function fetchMajorLeagueSchedules(now) {
   return { games, scores, completed };
 }
 
-async function inspectStreamCapabilities(source) {
-  if (!source.url) return source;
+async function inspectStreamCapabilities(source, provider = "") {
+  if (!source.url) {
+    if (!source.embedUrl) return null;
+    // TimStreams already verifies the underlying live manifest before returning
+    // its stable watch page. Other embedded providers are checked for an online
+    // HTTPS response so dead event pages do not appear as selectable broadcasts.
+    if (provider === "timstreams") return source;
+    try {
+      const referer = provider === "ppv" ? "https://ppv.st/" : "https://streamcorner.st/";
+      const response = await fetch(source.embedUrl, {
+        headers: { Accept: "text/html", Referer: referer, "User-Agent": "StreamCorner-TV-Feed/1.13" },
+        redirect: "follow", signal: AbortSignal.timeout(12_000),
+      });
+      if (!response.ok) return null;
+      const body = await response.text();
+      return body.trim().length >= 200 ? source : null;
+    } catch {
+      return null;
+    }
+  }
   try {
     const response = await fetch(source.url, {
       headers: { Accept: "application/dash+xml,application/vnd.apple.mpegurl,application/x-mpegURL,*/*", "User-Agent": "StreamCorner-TV-Feed/1.5", ...(source.headers || {}) },
       redirect: "follow", signal: AbortSignal.timeout(12_000),
     });
-    if (!response.ok) return source;
+    if (!response.ok) return null;
     const manifest = await response.text();
+    if (!/^\s*(?:#EXTM3U|<\?xml[\s\S]*?<MPD|<MPD)/i.test(manifest)) return null;
     const heights = [...manifest.matchAll(/(?:height\s*=\s*["'](\d+)["']|RESOLUTION\s*=\s*\d+x(\d+))/gi)]
       .map((match) => Number(match[1] || match[2] || 0));
     const maxHeight = Math.max(0, ...heights);
@@ -198,7 +217,7 @@ async function inspectStreamCapabilities(source) {
       : /ec-3|eac3|e-ac-3/i.test(manifest) ? "DOLBY DIGITAL+" : "";
     return { ...source, maxHeight, videoRange, audioFormat };
   } catch {
-    return source;
+    return null;
   }
 }
 const providerNames = {
@@ -414,7 +433,7 @@ try {
       : null;
     const sources = (Array.isArray(detail.streams) ? detail.streams : [])
       .map((source, sourceIndex) => ({
-        name: String(source.source_name || `Source ${sourceIndex + 1}`),
+        name: `StreamCorner • ${String(source.source_name || `Source ${sourceIndex + 1}`).replace(/^StreamCorner\s*[•|-]\s*/i, "")}`,
         url: String(source.stream_url || ""),
         clearKey: String(source.stream_keys || ""),
         embedUrl: String(source.embed_url || ""),
@@ -505,9 +524,10 @@ try {
       const jobIndex = capabilityIndex++;
       if (jobIndex >= liveSources.length) return;
       const item = liveSources[jobIndex];
-      item.game.sources[item.index] = await inspectStreamCapabilities(item.source);
+      item.game.sources[item.index] = await inspectStreamCapabilities(item.source, item.game.provider);
     }
   }));
+  games.forEach((game) => { game.sources = game.sources.filter(Boolean); });
 
   const directStreams = games.flatMap((game) => game.sources
     .filter((source) => source.url)
