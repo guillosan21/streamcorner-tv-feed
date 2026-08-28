@@ -511,16 +511,19 @@ try {
         const rawUrl = String(source.stream_url || "").trim();
         const directUrl = /\.(?:m3u8|mpd)(?:$|[?#&])/i.test(rawUrl) ? rawUrl : "";
         const embedUrl = String(source.embed_url || (!directUrl ? rawUrl : "")).trim();
-        const directHost = runCatchingUrlHost(directUrl);
         const embedHost = runCatchingUrlHost(embedUrl);
-        const isTimDirect = directHost.endsWith(".aiv-cdn.net") || directHost.endsWith(".pv-cdn.net") ||
-          directHost === "timstreams.st" || directHost.endsWith(".timstreams.st");
         const isPpvWeb = !directUrl && (embedHost === "embedindia.st" || embedHost.endsWith(".embedindia.st") ||
           embedHost === "embedhd.st" || embedHost.endsWith(".embedhd.st") ||
           embedHost.endsWith(".ppvservices.st") || embedHost.endsWith(".pandecocogaming.sbs"));
-        const channelName = String(source.source_name || `Source ${sourceIndex + 1}`).replace(/^(?:StreamCorner|PPV)\s*[•|-]\s*/i, "");
+        const isTimWeb = !directUrl && (embedHost === "timstreams.st" || embedHost.endsWith(".timstreams.st") ||
+          /^cdx-\d+\.website$/.test(embedHost));
+        const channelName = String(source.source_name || `Source ${sourceIndex + 1}`).replace(/^(?:StreamCorner|TimStreams|PPV)\s*[•|-]\s*/i, "");
+        const sourceProvider = isPpvWeb ? "PPV" : isTimWeb ? "TimStreams" : "StreamCorner";
         return {
-          name: `${isTimDirect ? "TimStreams" : isPpvWeb ? "PPV" : "StreamCorner"} • ${channelName}`,
+          // These jobs came from StreamCorner. Only a provider-owned web player
+          // overrides that provenance; shared direct CDNs never do.
+          provider: sourceProvider,
+          name: `${sourceProvider} • ${channelName}`,
           url: directUrl,
           clearKey: directUrl ? String(source.stream_keys || "") : "",
           embedUrl,

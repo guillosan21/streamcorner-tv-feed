@@ -60,7 +60,7 @@ export async function fetchPpvGames(now) {
         status: startsAt > nowSeconds ? "upcoming" : "live", is24x7: false,
         homeTeam: teams.homeTeam, awayTeam: teams.awayTeam, homeLogoUrl: "", awayLogoUrl: "",
         posterUrl: String(event?.poster || "").trim().replace(/^http:/, "https:"), categoryLogoUrl: "", venue: "",
-        sources: [{ name: `PPV • ${String(event?.source_tag || "Web feed").trim()}`, url: "", clearKey: "", embedUrl, headers: { Referer: PPV_SITE } }],
+        sources: [{ provider: "PPV", name: `PPV • ${String(event?.source_tag || "Web feed").trim()}`, url: "", clearKey: "", embedUrl, headers: { Referer: PPV_SITE } }],
       };
     }).filter(Boolean);
     return { games, catalogCount: events.length, playableCount: games.length, apiUrl: PPV_API, error: "" };
