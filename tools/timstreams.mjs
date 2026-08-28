@@ -91,6 +91,7 @@ async function resolveStream(stream, event, verifyLive) {
   }
   return {
     provider: "TimStreams",
+    embedProvider: "TimStreams",
     name: `TimStreams • ${String(stream?.name || "Live feed").trim()}`,
     url: "",
     clearKey: "",

@@ -512,22 +512,24 @@ try {
         const directUrl = /\.(?:m3u8|mpd)(?:$|[?#&])/i.test(rawUrl) ? rawUrl : "";
         const embedUrl = String(source.embed_url || (!directUrl ? rawUrl : "")).trim();
         const embedHost = runCatchingUrlHost(embedUrl);
-        const isPpvWeb = !directUrl && (embedHost === "embedindia.st" || embedHost.endsWith(".embedindia.st") ||
+        const isPpvEmbed = embedHost === "embedindia.st" || embedHost.endsWith(".embedindia.st") ||
           embedHost === "embedhd.st" || embedHost.endsWith(".embedhd.st") ||
-          embedHost.endsWith(".ppvservices.st") || embedHost.endsWith(".pandecocogaming.sbs"));
-        const isTimWeb = !directUrl && (embedHost === "timstreams.st" || embedHost.endsWith(".timstreams.st") ||
-          /^cdx-\d+\.website$/.test(embedHost));
+          embedHost.endsWith(".ppvservices.st") || embedHost.endsWith(".pandecocogaming.sbs");
+        const isTimEmbed = embedHost === "timstreams.st" || embedHost.endsWith(".timstreams.st") ||
+          /^cdx-\d+\.website$/.test(embedHost);
         const channelName = String(source.source_name || `Source ${sourceIndex + 1}`).replace(/^(?:StreamCorner|TimStreams|PPV)\s*[•|-]\s*/i, "");
-        const sourceProvider = isPpvWeb ? "PPV" : isTimWeb ? "TimStreams" : "StreamCorner";
+        const embedProvider = isPpvEmbed ? "PPV" : isTimEmbed ? "TimStreams" : "StreamCorner";
+        const sourceProvider = directUrl ? "StreamCorner" : embedProvider;
         return {
           // These jobs came from StreamCorner. Only a provider-owned web player
           // overrides that provenance; shared direct CDNs never do.
           provider: sourceProvider,
+          embedProvider,
           name: `${sourceProvider} • ${channelName}`,
           url: directUrl,
           clearKey: directUrl ? String(source.stream_keys || "") : "",
           embedUrl,
-          ...(isPpvWeb ? { headers: { Referer: "https://ppv.st/" } } : {}),
+          ...(!directUrl && isPpvEmbed ? { headers: { Referer: "https://ppv.st/" } } : {}),
         };
       })
       .filter((source) => source.url || source.embedUrl)
