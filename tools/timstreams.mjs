@@ -58,25 +58,16 @@ function decodeEmbedPayload(html) {
 async function resolveStream(stream) {
   const embedUrl = String(stream?.url || "").trim();
   if (!embedUrl.startsWith("https://") || stream?.vip === true) return null;
-  try {
-    const response = await fetch(embedUrl, {
-      headers: { Accept: "text/html", Referer: TIMSTREAMS_SITE, "User-Agent": "StreamCorner-TV-Feed/1.5" },
-      redirect: "follow", signal: AbortSignal.timeout(15_000),
-    });
-    if (!response.ok) return null;
-    const url = decodeEmbedPayload(await response.text());
-    if (!url) return null;
-    const referer = `${new URL(response.url || embedUrl).origin}/`;
-    return {
-      name: `TimStreams • ${String(stream?.name || "Live feed").trim()}`,
-      url,
-      clearKey: "",
-      embedUrl,
-      headers: { Referer: referer },
-    };
-  } catch {
-    return null;
-  }
+  // The decoded HLS URL is deliberately short-lived and can rotate before a free
+  // GitHub Actions refresh completes. The provider player resolves it at playback
+  // time, so publish that stable entry point instead of a soon-stale manifest.
+  return {
+    name: `TimStreams • ${String(stream?.name || "Live feed").trim()}`,
+    url: "",
+    clearKey: "",
+    embedUrl,
+    headers: { Referer: TIMSTREAMS_SITE },
+  };
 }
 
 function eventTeams(title) {
