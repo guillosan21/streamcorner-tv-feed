@@ -87,6 +87,58 @@ function canonicalTeam(value) {
     .replace(/\b(fc|cf|afc|club|town)\b/g, " ").replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+function eventSides(game) {
+  if (game.homeTeam && game.awayTeam) return [canonicalTeam(game.homeTeam), canonicalTeam(game.awayTeam)];
+  const pieces = String(game.title || "").split("|")[0]
+    .split(/\s+(?:vs\.?|versus|at|@|-|–|—)\s+/i)
+    .map(canonicalTeam).filter(Boolean);
+  return pieces.length >= 2 ? pieces.slice(-2) : [];
+}
+
+function similarTeam(first, second) {
+  if (!first || !second) return false;
+  if (first === second) return true;
+  const ignored = new Set(["team", "club", "fc", "cf", "afc", "sc", "ac", "olympique"]);
+  const firstTokens = first.split(" ").filter((token) => token.length >= 3 && !ignored.has(token));
+  const secondTokens = second.split(" ").filter((token) => token.length >= 3 && !ignored.has(token));
+  if (!firstTokens.length || !secondTokens.length) return false;
+  const matched = firstTokens.filter((left) => secondTokens.some((right) =>
+    left === right || (Math.min(left.length, right.length) >= 4 && (left.startsWith(right) || right.startsWith(left))))).length;
+  return matched >= Math.min(firstTokens.length, secondTokens.length);
+}
+
+function sameFeedEvent(first, second) {
+  if (Math.abs(Date.parse(first.startsAt) - Date.parse(second.startsAt)) > 15 * 60 * 1000) return false;
+  const left = eventSides(first);
+  const right = eventSides(second);
+  if (left.length !== 2 || right.length !== 2) return false;
+  return (similarTeam(left[0], right[0]) && similarTeam(left[1], right[1])) ||
+    (similarTeam(left[0], right[1]) && similarTeam(left[1], right[0]));
+}
+
+function deduplicateFeedGames(rows) {
+  const merged = [];
+  for (const game of rows) {
+    const existing = merged.find((candidate) => sameFeedEvent(candidate, game));
+    if (!existing) {
+      merged.push(game);
+      continue;
+    }
+    const sourceKeys = new Set(existing.sources.map((source) => source.url
+      ? `direct:${source.url}:${source.clearKey}` : `web:${source.embedUrl}`));
+    for (const source of game.sources) {
+      const key = source.url ? `direct:${source.url}:${source.clearKey}` : `web:${source.embedUrl}`;
+      if (!sourceKeys.has(key)) { existing.sources.push(source); sourceKeys.add(key); }
+    }
+    if (game.status === "live") existing.status = "live";
+    if (!existing.venue && game.venue) existing.venue = game.venue;
+    if (!existing.homeLogoUrl && game.homeLogoUrl) existing.homeLogoUrl = game.homeLogoUrl;
+    if (!existing.awayLogoUrl && game.awayLogoUrl) existing.awayLogoUrl = game.awayLogoUrl;
+    if (!existing.posterUrl && game.posterUrl) existing.posterUrl = game.posterUrl;
+  }
+  return merged;
+}
+
 function isMissingVenue(value) {
   return !String(value || "").trim() || /^(?:venue\s+)?tba$/i.test(String(value).trim());
 }
@@ -187,7 +239,10 @@ async function inspectStreamCapabilities(source, provider = "") {
     // HTTPS response so dead event pages do not appear as selectable broadcasts.
     if (provider === "timstreams") return source;
     try {
-      const referer = provider === "ppv" ? "https://ppv.st/" : "https://streamcorner.st/";
+      const embedHost = runCatchingUrlHost(source.embedUrl);
+      const isPpvSource = provider === "ppv" || source.name.startsWith("PPV •") ||
+        embedHost === "embedindia.st" || embedHost.endsWith(".embedindia.st") || embedHost.endsWith(".pandecocogaming.sbs");
+      const referer = isPpvSource ? "https://ppv.st/" : "https://streamcorner.st/";
       const response = await fetch(source.embedUrl, {
         headers: { Accept: "text/html", Referer: referer, "User-Agent": "StreamCorner-TV-Feed/1.13" },
         redirect: "follow", signal: AbortSignal.timeout(12_000),
@@ -219,6 +274,9 @@ async function inspectStreamCapabilities(source, provider = "") {
   } catch {
     return null;
   }
+}
+function runCatchingUrlHost(value) {
+  try { return new URL(value).host.toLowerCase(); } catch { return ""; }
 }
 const providerNames = {
   admin: "ADMIN",
@@ -432,12 +490,22 @@ try {
       ? (timestamp > nowSeconds ? "upcoming" : "live")
       : null;
     const sources = (Array.isArray(detail.streams) ? detail.streams : [])
-      .map((source, sourceIndex) => ({
-        name: `StreamCorner • ${String(source.source_name || `Source ${sourceIndex + 1}`).replace(/^StreamCorner\s*[•|-]\s*/i, "")}`,
-        url: String(source.stream_url || ""),
-        clearKey: String(source.stream_keys || ""),
-        embedUrl: String(source.embed_url || ""),
-      }))
+      .map((source, sourceIndex) => {
+        const rawUrl = String(source.stream_url || "").trim();
+        const directUrl = /\.(?:m3u8|mpd)(?:$|[?#&])/i.test(rawUrl) ? rawUrl : "";
+        const embedUrl = String(source.embed_url || (!directUrl ? rawUrl : "")).trim();
+        const embedHost = runCatchingUrlHost(embedUrl);
+        const isPpvWeb = !directUrl && (embedHost === "embedindia.st" || embedHost.endsWith(".embedindia.st") ||
+          embedHost.endsWith(".ppvservices.st") || embedHost.endsWith(".pandecocogaming.sbs"));
+        const channelName = String(source.source_name || `Source ${sourceIndex + 1}`).replace(/^(?:StreamCorner|PPV)\s*[•|-]\s*/i, "");
+        return {
+          name: `${isPpvWeb ? "PPV" : "StreamCorner"} • ${channelName}`,
+          url: directUrl,
+          clearKey: directUrl ? String(source.stream_keys || "") : "",
+          embedUrl,
+          ...(isPpvWeb ? { headers: { Referer: "https://ppv.st/" } } : {}),
+        };
+      })
       .filter((source) => source.url || source.embedUrl)
       .filter((source, sourceIndex, rows) => rows.findIndex((candidate) =>
         source.url ? candidate.url === source.url && candidate.clearKey === source.clearKey : candidate.embedUrl === source.embedUrl) === sourceIndex);
@@ -514,7 +582,7 @@ try {
       games.push(scheduled);
     }
   }
-  games = games.filter((game) => game.scheduleState !== "post");
+  games = deduplicateFeedGames(games.filter((game) => game.scheduleState !== "post"));
   games.sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt));
 
   const liveSources = games.filter((game) => game.status === "live").flatMap((game) => game.sources.map((source, index) => ({ game, source, index })));

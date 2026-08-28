@@ -15,10 +15,13 @@ function displayLeague(tag, category) {
 }
 
 function eventTeams(title) {
+  const cleanTeam = (value) => String(value || "").trim()
+    .replace(/^\d+(?:st|nd|rd|th)\s+(?:test|round|leg|match)\s*[-:|]\s*/i, "")
+    .trim();
   const at = String(title || "").split(/\s+(?:at|@)\s+/i);
-  if (at.length === 2) return { awayTeam: at[0].trim(), homeTeam: at[1].trim() };
+  if (at.length === 2) return { awayTeam: cleanTeam(at[0]), homeTeam: cleanTeam(at[1]) };
   const versus = String(title || "").split(/\s+vs\.?\s+/i);
-  return versus.length === 2 ? { homeTeam: versus[0].trim(), awayTeam: versus[1].trim() } : { homeTeam: "", awayTeam: "" };
+  return versus.length === 2 ? { homeTeam: cleanTeam(versus[0]), awayTeam: cleanTeam(versus[1]) } : { homeTeam: "", awayTeam: "" };
 }
 
 function safeEmbedUrl(event) {
