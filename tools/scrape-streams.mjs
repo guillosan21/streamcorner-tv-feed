@@ -85,6 +85,9 @@ function canonicalTeam(value) {
   return String(value || "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()
     .replace(/\bchiacgo\b/g, "chicago")
     .replace(/\bman city\b/g, "manchester city")
+    .replace(/\bpsg\b/g, "paris saint germain")
+    .replace(/\bman utd\b|\bman united\b/g, "manchester united")
+    .replace(/\bspurs\b/g, "tottenham hotspur")
     .replace(/\bmunchen\b/g, "munich")
     .replace(/\bvfb\b/g, " ")
     .replace(/\breal racing club\b/g, "racing santander")
@@ -112,13 +115,16 @@ function similarTeam(first, second) {
   const firstTokens = first.split(" ").filter((token) => token.length >= 3 && !ignored.has(token));
   const secondTokens = second.split(" ").filter((token) => token.length >= 3 && !ignored.has(token));
   if (!firstTokens.length || !secondTokens.length) return false;
+  const initials = (tokens) => tokens.map((token) => token[0]).join("");
+  if (first.length >= 3 && !first.includes(" ") && first === initials(secondTokens)) return true;
+  if (second.length >= 3 && !second.includes(" ") && second === initials(firstTokens)) return true;
   const matched = firstTokens.filter((left) => secondTokens.some((right) =>
     left === right || (Math.min(left.length, right.length) >= 4 && (left.startsWith(right) || right.startsWith(left))))).length;
   return matched >= Math.min(firstTokens.length, secondTokens.length);
 }
 
 function sameFeedEvent(first, second) {
-  if (Math.abs(Date.parse(first.startsAt) - Date.parse(second.startsAt)) > 15 * 60 * 1000) return false;
+  if (Math.abs(Date.parse(first.startsAt) - Date.parse(second.startsAt)) > 30 * 60 * 1000) return false;
   const left = eventSides(first);
   const right = eventSides(second);
   if (left.length !== 2 || right.length !== 2) return false;
@@ -127,8 +133,10 @@ function sameFeedEvent(first, second) {
 }
 
 function deduplicateFeedGames(rows) {
+  let current = rows;
+  while (true) {
   const merged = [];
-  for (const game of rows) {
+  for (const game of current) {
     const existing = merged.find((candidate) => sameFeedEvent(candidate, game));
     if (!existing) {
       merged.push(game);
@@ -154,7 +162,19 @@ function deduplicateFeedGames(rows) {
     if (!existing.awayLogoUrl && game.awayLogoUrl) existing.awayLogoUrl = game.awayLogoUrl;
     if (!existing.posterUrl && game.posterUrl) existing.posterUrl = game.posterUrl;
   }
-  return merged;
+  if (merged.length === current.length) return merged;
+  current = merged;
+  }
+}
+
+function countRemainingDuplicatePairs(rows) {
+  let count = 0;
+  for (let left = 0; left < rows.length; left += 1) {
+    for (let right = left + 1; right < rows.length; right += 1) {
+      if (sameFeedEvent(rows[left], rows[right])) count += 1;
+    }
+  }
+  return count;
 }
 
 function isMissingVenue(value) {
@@ -611,6 +631,8 @@ try {
     }
   }
   games = deduplicateFeedGames(games.filter((game) => game.scheduleState !== "post"));
+  const duplicateEventPairCount = countRemainingDuplicatePairs(games);
+  if (duplicateEventPairCount > 0) throw new Error(`feed still contains ${duplicateEventPairCount} mergeable duplicate event pair(s)`);
   games.sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt));
 
   const liveSources = games.filter((game) => game.status === "live").flatMap((game) => game.sources.map((source, index) => ({ game, source, index })));
@@ -677,6 +699,7 @@ try {
       teamCount: teamCatalog.teams.length,
       scoreCount: schedule.scores.length,
       liveScoreCount: schedule.scores.filter((score) => score.state === "in").length,
+      duplicateEventPairCount,
       teamCatalogErrors: teamCatalog.errors,
     }, null, 2)}\n`, "utf8");
   }
@@ -692,6 +715,7 @@ try {
     teamCount: teamCatalog.teams.length,
     scoreCount: schedule.scores.length,
     liveScoreCount: schedule.scores.filter((score) => score.state === "in").length,
+    duplicateEventPairCount,
     teamCatalogErrors: teamCatalog.errors,
     feedOutput: APP_FEED_OUTPUT,
     scrapeOutput: SCRAPE_OUTPUT,
