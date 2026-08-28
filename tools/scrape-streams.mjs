@@ -83,6 +83,11 @@ function compactDate(date) {
 
 function canonicalTeam(value) {
   return String(value || "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()
+    .replace(/\bchiacgo\b/g, "chicago")
+    .replace(/\bmunchen\b/g, "munich")
+    .replace(/\bvfb\b/g, " ")
+    .replace(/\breal racing club\b/g, "racing santander")
+    .replace(/\bracing de santander\b/g, "racing santander")
     .replace(/\bathletic bilbao\b/g, "athletic")
     .replace(/\b(fc|cf|afc|club|town)\b/g, " ").replace(/[^a-z0-9]+/g, " ").trim();
 }
@@ -133,6 +138,14 @@ function deduplicateFeedGames(rows) {
     for (const source of game.sources) {
       const key = source.url ? `direct:${source.url}:${source.clearKey}` : `web:${source.embedUrl}`;
       if (!sourceKeys.has(key)) { existing.sources.push(source); sourceKeys.add(key); }
+    }
+    const authority = (row) => (row.scoreboardLeagueId ? 8 : 0) + (row.scheduleState ? 4 : 0) +
+      (String(row.homeLogoUrl || "").includes("espncdn.com") && String(row.awayLogoUrl || "").includes("espncdn.com") ? 2 : 0) +
+      (row.venue ? 1 : 0);
+    if (authority(game) > authority(existing)) {
+      const preservedSources = existing.sources;
+      Object.assign(existing, game);
+      existing.sources = preservedSources;
     }
     if (game.status === "live") existing.status = "live";
     if (!existing.venue && game.venue) existing.venue = game.venue;
@@ -503,6 +516,7 @@ try {
         const isTimDirect = directHost.endsWith(".aiv-cdn.net") || directHost.endsWith(".pv-cdn.net") ||
           directHost === "timstreams.st" || directHost.endsWith(".timstreams.st");
         const isPpvWeb = !directUrl && (embedHost === "embedindia.st" || embedHost.endsWith(".embedindia.st") ||
+          embedHost === "embedhd.st" || embedHost.endsWith(".embedhd.st") ||
           embedHost.endsWith(".ppvservices.st") || embedHost.endsWith(".pandecocogaming.sbs"));
         const channelName = String(source.source_name || `Source ${sourceIndex + 1}`).replace(/^(?:StreamCorner|PPV)\s*[•|-]\s*/i, "");
         return {
