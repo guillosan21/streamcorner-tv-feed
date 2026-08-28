@@ -515,7 +515,8 @@ try {
         const embedHost = runCatchingUrlHost(embedUrl);
         const isPpvEmbed = embedHost === "embedindia.st" || embedHost.endsWith(".embedindia.st") ||
           embedHost === "embedhd.st" || embedHost.endsWith(".embedhd.st") ||
-          embedHost.endsWith(".ppvservices.st") || embedHost.endsWith(".pandecocogaming.sbs");
+          embedHost.endsWith(".ppvservices.st") || embedHost.endsWith(".pandecocogaming.sbs") ||
+          embedHost.endsWith(".getsugatensho.sbs");
         const isTimEmbed = embedHost === "timstreams.st" || embedHost.endsWith(".timstreams.st") ||
           /^cdx-\d+\.website$/.test(embedHost);
         const channelName = String(source.source_name || `Source ${sourceIndex + 1}`).replace(/^(?:StreamCorner|TimStreams|PPV)\s*[•|-]\s*/i, "");
