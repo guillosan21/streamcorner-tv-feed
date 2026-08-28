@@ -472,7 +472,16 @@ try {
     if (matches.length) {
       for (const match of matches) {
         matchedSourceGames.add(match.id);
-        if (isMissingVenue(match.venue) && !isMissingVenue(scheduled.venue)) match.venue = scheduled.venue;
+        // Normalize a matched provider event to ESPN's authoritative event identity.
+        // Provider titles and rounded start times otherwise prevent source merging.
+        match.title = scheduled.title;
+        match.league = scheduled.league;
+        match.sport = scheduled.sport;
+        match.startsAt = scheduled.startsAt;
+        match.endsAt = scheduled.endsAt;
+        match.homeTeam = scheduled.homeTeam;
+        match.awayTeam = scheduled.awayTeam;
+        if (!isMissingVenue(scheduled.venue)) match.venue = scheduled.venue;
         match.homeLogoUrl ||= scheduled.homeLogoUrl;
         match.awayLogoUrl ||= scheduled.awayLogoUrl;
         match.scheduleState = scheduled.scheduleState;

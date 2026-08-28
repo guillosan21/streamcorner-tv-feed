@@ -80,8 +80,12 @@ async function resolveStream(stream) {
 }
 
 function eventTeams(title) {
-  const sides = String(title || "").split(/\s+@\s+/);
-  return sides.length === 2 ? { awayTeam: sides[0].trim(), homeTeam: sides[1].trim() } : { awayTeam: "", homeTeam: "" };
+  const value = String(title || "").trim();
+  const atSides = value.split(/\s+@\s+/);
+  if (atSides.length === 2) return { awayTeam: atSides[0].trim(), homeTeam: atSides[1].trim() };
+  const versusSides = value.split(/\s+vs\.?\s+/i);
+  if (versusSides.length === 2) return { homeTeam: versusSides[0].trim(), awayTeam: versusSides[1].trim() };
+  return { awayTeam: "", homeTeam: "" };
 }
 
 function canonicalLeague(rawLeague, sport, title) {
