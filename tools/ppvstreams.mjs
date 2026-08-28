@@ -2,12 +2,17 @@ const PPV_API = "https://api.ppv.st/api/streams";
 const PPV_SITE = "https://ppv.st/";
 const PPV_EMBED_ORIGIN = "https://embedindia.st";
 
-const SUPPORTED_LEAGUES = new Map([
+const CANONICAL_LEAGUES = new Map([
   ["NFL", "NFL"], ["MLB", "MLB"], ["NBA", "NBA"], ["WNBA", "WNBA"], ["NHL", "NHL"],
   ["MLS", "MLS"], ["NWSL", "NWSL"], ["LIGA MX", "Liga MX"], ["PREMIER LEAGUE", "Premier League"],
   ["LALIGA", "La Liga"], ["SERIE A", "Serie A"], ["BUNDESLIGA", "Bundesliga"], ["LIGUE 1", "Ligue 1"],
   ["UEFA CHAMPIONS LEAGUE", "UEFA Champions League"], ["CHAMPIONS LEAGUE", "UEFA Champions League"],
 ]);
+
+function displayLeague(tag, category) {
+  const value = String(tag || "").trim();
+  return CANONICAL_LEAGUES.get(value.toUpperCase()) || value || String(category || "Sports").trim() || "Sports";
+}
 
 function eventTeams(title) {
   const at = String(title || "").split(/\s+(?:at|@)\s+/i);
@@ -38,11 +43,11 @@ export async function fetchPpvGames(now) {
       .map((event) => ({ ...event, category: String(category?.category || event?.category_name || "Sports") })));
     const nowSeconds = Math.floor(now.getTime() / 1000);
     const games = events.map((event) => {
-      const league = SUPPORTED_LEAGUES.get(String(event?.tag || "").trim().toUpperCase());
+      const league = displayLeague(event?.tag, event?.category);
       const startsAt = Number(event?.starts_at || 0);
       const endsAt = Number(event?.ends_at || 0);
       const embedUrl = safeEmbedUrl(event);
-      if (!league || !startsAt || !endsAt || endsAt <= nowSeconds || !embedUrl || event?.always_live === true || Number(event?.always_live) === 1) return null;
+      if (!startsAt || !endsAt || endsAt <= nowSeconds || !embedUrl || event?.always_live === true || Number(event?.always_live) === 1) return null;
       const title = String(event?.name || "PPV event").trim();
       const teams = eventTeams(title);
       return {
@@ -61,4 +66,4 @@ export async function fetchPpvGames(now) {
   }
 }
 
-export const __testing = { eventTeams, safeEmbedUrl };
+export const __testing = { displayLeague, eventTeams, safeEmbedUrl };
