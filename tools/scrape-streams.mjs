@@ -143,9 +143,12 @@ function deduplicateFeedGames(rows) {
       continue;
     }
     const sourceKeys = new Set(existing.sources.map((source) => source.url
-      ? `direct:${source.url}:${source.clearKey}` : `web:${source.embedUrl}`));
+      ? `${source.provider}:direct:${source.url}:${source.clearKey}`
+      : `${source.provider}:web:${source.embedUrl}`));
     for (const source of game.sources) {
-      const key = source.url ? `direct:${source.url}:${source.clearKey}` : `web:${source.embedUrl}`;
+      const key = source.url
+        ? `${source.provider}:direct:${source.url}:${source.clearKey}`
+        : `${source.provider}:web:${source.embedUrl}`;
       if (!sourceKeys.has(key)) { existing.sources.push(source); sourceKeys.add(key); }
     }
     const authority = (row) => (row.scoreboardLeagueId ? 8 : 0) + (row.scheduleState ? 4 : 0) +
@@ -205,9 +208,8 @@ function sourceProvenanceErrors(rows) {
       if (inferred && embedProvider !== inferred) {
         errors.push(`${game.id}: ${source.embedUrl} has embedProvider=${embedProvider || "<empty>"}, expected ${inferred}`);
       }
-      if (!source.url && inferred && provider !== inferred) {
-        errors.push(`${game.id}: web source provider=${provider || "<empty>"}, expected ${inferred}`);
-      }
+      // provider is the catalog owner; embedProvider is the verified playback host.
+      // They legitimately differ when StreamCorner hands a web event to a PPV player.
     }
   }
   return errors;
@@ -236,6 +238,22 @@ function collapsePpvMirrors(rows) {
     // Preserve provider ordering when the canonical entry originally followed a mirror.
     if (!inserted) game.sources.push(canonical);
     removed += ppvSources.length - 1;
+  }
+  return removed;
+}
+
+function collapseStreamCornerWebMirrors(rows) {
+  let removed = 0;
+  for (const game of rows) {
+    const mirrors = (game.sources || []).filter((source) => source.provider === "StreamCorner" && !source.url);
+    if (mirrors.length <= 1) continue;
+    const canonical = [...mirrors].sort((first, second) => {
+      const priority = (source) => (!/\b(?:stream|source)\s*\d+\b/i.test(String(source.name || "")) ? 4 : 0) +
+        (/^https:\/\/embedindia\.st\/embed\//i.test(String(source.embedUrl || "")) ? 2 : 0);
+      return priority(second) - priority(first);
+    })[0];
+    game.sources = game.sources.filter((source) => source.provider !== "StreamCorner" || source.url || source === canonical);
+    removed += mirrors.length - 1;
   }
   return removed;
 }
@@ -606,10 +624,9 @@ try {
           /^cdx-\d+\.website$/.test(embedHost);
         const channelName = String(source.source_name || `Source ${sourceIndex + 1}`).replace(/^(?:StreamCorner|TimStreams|PPV)\s*[•|-]\s*/i, "");
         const embedProvider = isPpvEmbed ? "PPV" : isTimEmbed ? "TimStreams" : "StreamCorner";
-        const sourceProvider = directUrl ? "StreamCorner" : embedProvider;
+        const sourceProvider = "StreamCorner";
         return {
-          // These jobs came from StreamCorner. Only a provider-owned web player
-          // overrides that provenance; shared direct CDNs never do.
+          // Keep catalog ownership separate from the verified player host.
           provider: sourceProvider,
           embedProvider,
           name: `${sourceProvider} • ${channelName}`,
@@ -621,7 +638,9 @@ try {
       })
       .filter((source) => source.url || source.embedUrl)
       .filter((source, sourceIndex, rows) => rows.findIndex((candidate) =>
-        source.url ? candidate.url === source.url && candidate.clearKey === source.clearKey : candidate.embedUrl === source.embedUrl) === sourceIndex);
+        candidate.provider === source.provider && (source.url
+          ? candidate.url === source.url && candidate.clearKey === source.clearKey
+          : candidate.embedUrl === source.embedUrl)) === sourceIndex);
 
     return {
       id: `${job.provider}-${job.id}`,
@@ -700,6 +719,7 @@ try {
   }
   games = deduplicateFeedGames(games.filter((game) => game.scheduleState !== "post"));
   const collapsedPpvMirrorCount = collapsePpvMirrors(games);
+  const collapsedStreamCornerMirrorCount = collapseStreamCornerWebMirrors(games);
   const duplicateEventPairCount = countRemainingDuplicatePairs(games);
   if (duplicateEventPairCount > 0) throw new Error(`feed still contains ${duplicateEventPairCount} mergeable duplicate event pair(s)`);
   games.sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt));
@@ -775,6 +795,7 @@ try {
       duplicateEventPairCount,
       sourceProvenanceErrorCount: provenanceErrors.length,
       collapsedPpvMirrorCount,
+      collapsedStreamCornerMirrorCount,
       teamCatalogErrors: teamCatalog.errors,
     }, null, 2)}\n`, "utf8");
   }
@@ -793,6 +814,7 @@ try {
     duplicateEventPairCount,
     sourceProvenanceErrorCount: provenanceErrors.length,
     collapsedPpvMirrorCount,
+    collapsedStreamCornerMirrorCount,
     teamCatalogErrors: teamCatalog.errors,
     feedOutput: APP_FEED_OUTPUT,
     scrapeOutput: SCRAPE_OUTPUT,
