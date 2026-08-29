@@ -28,8 +28,18 @@ function safeEmbedUrl(event) {
   const uriName = String(event?.uri_name || "").trim().replace(/^\/+/, "");
   if (!uriName || /(?:^|\/)\.\.(?:\/|$)/.test(uriName)) return "";
   try {
-    const url = new URL(`/embed/${uriName}`, PPV_EMBED_ORIGIN);
-    return url.protocol === "https:" && url.host === "embedindia.st" ? url.href : "";
+    const expectedPath = `/embed/${uriName}`;
+    const signedIframe = String(event?.iframe || "").trim();
+    if (signedIframe) {
+      const signedUrl = new URL(signedIframe);
+      if (signedUrl.protocol === "https:" && signedUrl.host === "embedindia.st" && signedUrl.pathname === expectedPath) {
+        // The gid query parameter authorizes the media session. A bare /embed URL
+        // renders JWPlayer but often has no playable event behind its Play button.
+        return signedUrl.href;
+      }
+      return "";
+    }
+    return new URL(expectedPath, PPV_EMBED_ORIGIN).href;
   } catch { return ""; }
 }
 

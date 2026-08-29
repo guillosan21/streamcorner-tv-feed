@@ -222,7 +222,10 @@ function collapsePpvMirrors(rows) {
       const priority = (source) => {
         const host = runCatchingUrlHost(source.embedUrl);
         const canonicalPath = /^https:\/\/embedindia\.st\/embed\//i.test(String(source.embedUrl || ""));
-        return (canonicalPath ? 8 : 0) + (host === "embedindia.st" ? 4 : 0) +
+        const hasSignedSession = (() => {
+          try { return Boolean(new URL(source.embedUrl).searchParams.get("gid")); } catch { return false; }
+        })();
+        return (hasSignedSession ? 32 : 0) + (canonicalPath ? 8 : 0) + (host === "embedindia.st" ? 4 : 0) +
           (!/\bstream\s*\d+\b/i.test(String(source.name || "")) ? 2 : 0);
       };
       return priority(second) - priority(first);
