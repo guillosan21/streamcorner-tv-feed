@@ -734,6 +734,9 @@ try {
   const teamCatalog = await fetchTeamCatalog();
   const feed = {
     updatedAt: now.toISOString(),
+    feedSchemaVersion: 2,
+    eventsDeduplicated: true,
+    finalEventsFiltered: true,
     catalogCounts,
     teams: teamCatalog.teams,
     games,
