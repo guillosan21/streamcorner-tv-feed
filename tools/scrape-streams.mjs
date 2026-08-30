@@ -742,7 +742,8 @@ try {
   const addonPpvDuplicatesRemoved = await preferAddonOverPpv(games);
   games.forEach((game) => {
     const seen = new Set();
-    game.sources = game.sources.sort((a, b) => Number(b.provider === "Sports Streams") - Number(a.provider === "Sports Streams"))
+    const rank = (source) => ({ StreamCorner: 0, "Sports Streams": 1, TimStreams: 2, PPV: 3 })[source.provider] ?? 4;
+    game.sources = game.sources.sort((a, b) => rank(a) - rank(b))
       .filter((source) => {
         const key = source.url ? `${source.url}:${source.clearKey}` : source.embedUrl;
         if (seen.has(key)) return false;
