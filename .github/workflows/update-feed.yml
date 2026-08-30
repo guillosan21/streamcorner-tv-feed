@@ -1,6 +1,8 @@
 name: Update StreamCorner TV feed
 
 on:
+  # Scheduled runs are best-effort on GitHub; workflow_dispatch provides an
+  # immediate refresh path when a live provider rotates between cron runs.
   push:
     branches:
       - main
