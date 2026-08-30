@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { fetchTimStreamsGames } from "./timstreams.mjs";
 import { fetchPpvGames } from "./ppvstreams.mjs";
+import { fetchHighflyGames, attachAddonSources, preferAddonOverPpv } from "./highfly.mjs";
 
 const SITE_URL = "https://streamcorner.st/";
 const DEFAULT_DECODER_URL = "https://streamcorner.st/assets/BjKHyKrh.js";
@@ -35,6 +36,9 @@ const scheduleLeagues = [
   ...teamLeagues,
   { id: "UEL", path: "soccer/uefa.europa", name: "UEFA Europa League", sport: "Soccer", region: "European Soccer" },
   { id: "EFL_CUP", path: "soccer/eng.league_cup", name: "EFL Cup", sport: "Soccer", region: "European Soccer" },
+  // Schedule-only coverage for add-on event matching; not favorite-team catalog entries.
+  { id: "NCAAF", path: "football/college-football", name: "NCAA Football", sport: "American Football", liveOnly: true },
+  { id: "BRA_SERIE_A", path: "soccer/bra.1", name: "Brazilian Serie A", sport: "Soccer", liveOnly: true },
 ];
 
 const workers = [
@@ -124,6 +128,7 @@ function similarTeam(first, second) {
 }
 
 function sameFeedEvent(first, second) {
+  if (!first.startsAt || !second.startsAt) return first.id === second.id;
   if (Math.abs(Date.parse(first.startsAt) - Date.parse(second.startsAt)) > 30 * 60 * 1000) return false;
   const left = eventSides(first);
   const right = eventSides(second);
@@ -196,7 +201,7 @@ function sourceProvenanceErrors(rows) {
       const provider = String(source.provider || "");
       const embedProvider = String(source.embedProvider || "");
       const inferred = inferredWebProvider(source.embedUrl);
-      if (!["StreamCorner", "TimStreams", "PPV"].includes(provider)) {
+      if (!["StreamCorner", "TimStreams", "PPV", "Sports Streams"].includes(provider)) {
         errors.push(`${game.id}: invalid provider ${provider || "<empty>"}`);
       }
       if (!String(source.name || "").startsWith(`${provider} • `)) {
@@ -236,7 +241,6 @@ function collapsePpvMirrors(rows) {
       if (!inserted && source === canonical) { inserted = true; return true; }
       return false;
     });
-    // Preserve provider ordering when the canonical entry originally followed a mirror.
     if (!inserted) game.sources.push(canonical);
     removed += ppvSources.length - 1;
   }
@@ -272,7 +276,8 @@ async function fetchMajorLeagueSchedules(now) {
   const completed = [];
   for (const league of scheduleLeagues) {
     try {
-      const response = await fetch(`${ESPN_SITE_API}/${league.path}/scoreboard?dates=${dates}&limit=1000`, {
+      const leagueDates = league.liveOnly ? `${compactDate(new Date(now.getTime() - 24 * 60 * 60_000))}-${compactDate(now)}` : dates;
+      const response = await fetch(`${ESPN_SITE_API}/${league.path}/scoreboard?dates=${leagueDates}&limit=1000`, {
         headers: { Accept: "application/json", "User-Agent": "StreamCorner-TV-Feed/1.3" }, signal: AbortSignal.timeout(25_000),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -280,6 +285,7 @@ async function fetchMajorLeagueSchedules(now) {
       for (const event of Array.isArray(payload?.events) ? payload.events : []) {
         const competition = event?.competitions?.[0] || {};
         const scheduleState = String(event?.status?.type?.state || "").toLowerCase();
+        if (league.liveOnly && scheduleState !== "in") continue;
         const startsAt = new Date(event.date);
         if (!Number.isFinite(startsAt.getTime())) continue;
         const competitors = Array.isArray(competition.competitors) ? competition.competitors : [];
@@ -702,10 +708,23 @@ try {
     }
   }
   games = deduplicateFeedGames(games.filter((game) => game.scheduleState !== "post"));
+  const highfly = await fetchHighflyGames(now);
+  catalogCounts.highfly = highfly.catalogCount;
+  if (highfly.errors.length) console.warn(`Sports Streams: ${highfly.errors.join("; ")}`);
+  const addonMatches = attachAddonSources(highfly.games, games, (game, event) => {
+    const sides = eventSides(event);
+    const sportKey = (value) => String(value).toLowerCase().replaceAll("-", " ")
+      .replace(/^football$/, "soccer").replace(/^nfl$/, "american football").replace(/^mlb$/, "baseball");
+      if (sportKey(game.sport) !== sportKey(event.sport)) return false;
+      const other = eventSides(game);
+      return sides.length === 2 && other.length === 2 &&
+        ((similarTeam(sides[0], other[0]) && similarTeam(sides[1], other[1])) ||
+         (similarTeam(sides[0], other[1]) && similarTeam(sides[1], other[0])));
+  });
   const collapsedPpvMirrorCount = collapsePpvMirrors(games);
   const duplicateEventPairCount = countRemainingDuplicatePairs(games);
   if (duplicateEventPairCount > 0) throw new Error(`feed still contains ${duplicateEventPairCount} mergeable duplicate event pair(s)`);
-  games.sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt));
+  games.sort((a, b) => (Date.parse(a.startsAt) || 0) - (Date.parse(b.startsAt) || 0));
 
   const liveSources = games.filter((game) => game.status === "live").flatMap((game) => game.sources.map((source, index) => ({ game, source, index })));
   let capabilityIndex = 0;
@@ -718,6 +737,19 @@ try {
     }
   }));
   games.forEach((game) => { game.sources = game.sources.filter(Boolean); });
+  // Only a successfully verified add-on source may replace a working PPV entry.
+  const addonPpvDuplicatesRemoved = await preferAddonOverPpv(games);
+  games.forEach((game) => {
+    const seen = new Set();
+    game.sources = game.sources.sort((a, b) => Number(b.provider === "Sports Streams") - Number(a.provider === "Sports Streams"))
+      .filter((source) => {
+        const key = source.url ? `${source.url}:${source.clearKey}` : source.embedUrl;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  });
+  games = games.filter((game) => game.provider !== "highfly" || game.sources.length);
   const provenanceErrors = sourceProvenanceErrors(games);
   if (provenanceErrors.length) {
     throw new Error(`source provenance validation failed (${provenanceErrors.length}): ${provenanceErrors.slice(0, 5).join("; ")}`);
@@ -746,6 +778,12 @@ try {
     scores: schedule.scores,
   };
   const scrape = {
+    highflyCatalogCount: highfly.catalogCount,
+    highflySourceCount: games.flatMap((game) => game.sources).filter((source) => source.provider === "Sports Streams").length,
+    addonPpvDuplicatesRemoved,
+    ambiguousAddonEvents: addonMatches.ambiguous,
+    unmatchedAddonEvents: addonMatches.unmatched,
+    highflyErrors: highfly.errors,
     scrapedAt: now.toISOString(),
     decoderUrl,
     timStreamsApiUrl: timStreams.apiUrl,
@@ -781,6 +819,10 @@ try {
       duplicateEventPairCount,
       sourceProvenanceErrorCount: provenanceErrors.length,
       collapsedPpvMirrorCount,
+      highflySourceCount: games.flatMap((game) => game.sources).filter((source) => source.provider === "Sports Streams").length,
+      addonPpvDuplicatesRemoved,
+      unmatchedAddonEvents: addonMatches.unmatched,
+      highflyErrors: highfly.errors,
       teamCatalogErrors: teamCatalog.errors,
     }, null, 2)}\n`, "utf8");
   }
@@ -799,6 +841,10 @@ try {
     duplicateEventPairCount,
     sourceProvenanceErrorCount: provenanceErrors.length,
     collapsedPpvMirrorCount,
+    highflySourceCount: games.flatMap((game) => game.sources).filter((source) => source.provider === "Sports Streams").length,
+    addonPpvDuplicatesRemoved,
+    unmatchedAddonEvents: addonMatches.unmatched,
+    highflyErrors: highfly.errors,
     teamCatalogErrors: teamCatalog.errors,
     feedOutput: APP_FEED_OUTPUT,
     scrapeOutput: SCRAPE_OUTPUT,
