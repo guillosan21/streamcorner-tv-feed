@@ -38,6 +38,7 @@ const scheduleLeagues = [
   { id: "EFL_CUP", path: "soccer/eng.league_cup", name: "EFL Cup", sport: "Soccer", region: "European Soccer" },
   // Schedule-only coverage for add-on event matching; not favorite-team catalog entries.
   { id: "NCAAF", path: "football/college-football", name: "NCAA Football", sport: "American Football", liveOnly: true },
+  { id: "NCAAF", path: "football/college-football", name: "NCAA Football", sport: "American Football", liveOnly: true, group: 81 },
   { id: "BRA_SERIE_A", path: "soccer/bra.1", name: "Brazilian Serie A", sport: "Soccer", liveOnly: true },
 ];
 
@@ -277,7 +278,7 @@ async function fetchMajorLeagueSchedules(now) {
   for (const league of scheduleLeagues) {
     try {
       const leagueDates = league.liveOnly ? `${compactDate(new Date(now.getTime() - 24 * 60 * 60_000))}-${compactDate(now)}` : dates;
-      const response = await fetch(`${ESPN_SITE_API}/${league.path}/scoreboard?dates=${leagueDates}&limit=1000`, {
+      const response = await fetch(`${ESPN_SITE_API}/${league.path}/scoreboard?dates=${leagueDates}&limit=1000${league.group ? `&groups=${league.group}` : ""}`, {
         headers: { Accept: "application/json", "User-Agent": "StreamCorner-TV-Feed/1.3" }, signal: AbortSignal.timeout(25_000),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
