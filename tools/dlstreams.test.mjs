@@ -24,6 +24,16 @@ test("parses unique sports channels from the provider catalog", () => {
   ]);
 });
 
+test("puts the most useful local regions first and sorts channels naturally", () => {
+  const channels = [
+    { name: "Arena Sport 2", group: "Europe Sports" },
+    { name: "TUDN MX", group: "Mexico Sports" },
+    { name: "ESPN 10 USA", group: "United States Sports" },
+    { name: "ESPN 2 USA", group: "United States Sports" },
+  ].sort(__testing.compareChannels);
+  assert.deepEqual(channels.map((channel) => channel.name), ["ESPN 2 USA", "ESPN 10 USA", "TUDN MX", "Arena Sport 2"]);
+});
+
 test("groups Mexico and international channels without changing their names", () => {
   assert.equal(__testing.channelGroup("ESPN 1 MX"), "Mexico Sports");
   assert.equal(__testing.channelGroup("NFL Network"), "United States Sports");

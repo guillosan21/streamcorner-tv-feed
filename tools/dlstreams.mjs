@@ -51,6 +51,23 @@ function channelGroup(name) {
   return "International Sports";
 }
 
+const GROUP_PRIORITY = new Map([
+  ["United States Sports", 0],
+  ["Mexico Sports", 1],
+  ["Canada Sports", 2],
+  ["United Kingdom Sports", 3],
+  ["Latin America Sports", 4],
+  ["Europe Sports", 5],
+  ["Middle East & Africa Sports", 6],
+  ["Asia Pacific Sports", 7],
+  ["International Sports", 8],
+]);
+
+function compareChannels(left, right) {
+  const groupDifference = (GROUP_PRIORITY.get(left.group) ?? 99) - (GROUP_PRIORITY.get(right.group) ?? 99);
+  return groupDifference || left.name.localeCompare(right.name, "en", { numeric: true, sensitivity: "base" });
+}
+
 function parseChannels(html) {
   const channels = [];
   const seen = new Set();
@@ -62,7 +79,7 @@ function parseChannels(html) {
     seen.add(id);
     channels.push({ id, name, group: channelGroup(name) });
   }
-  return channels;
+  return channels.sort(compareChannels);
 }
 
 function parsePlayerTemplate(html, expectedId) {
@@ -154,4 +171,4 @@ export async function fetchDlStreamsGames(now) {
   }
 }
 
-export const __testing = { channelGroup, decodeHtml, isSportsChannel, parseChannels, parsePlayerTemplate };
+export const __testing = { channelGroup, compareChannels, decodeHtml, isSportsChannel, parseChannels, parsePlayerTemplate };
