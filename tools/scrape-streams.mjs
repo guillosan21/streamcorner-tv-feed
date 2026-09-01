@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { fetchTimStreamsGames } from "./timstreams.mjs";
 import { fetchPpvGames } from "./ppvstreams.mjs";
+import { fetchDlStreamsGames } from "./dlstreams.mjs";
 import { fetchHighflyGames, attachAddonSources, preferAddonOverPpv } from "./highfly.mjs";
 
 const SITE_URL = "https://streamcorner.st/";
@@ -192,6 +193,7 @@ function inferredWebProvider(embedUrl) {
       host === "embedhd.st" || host.endsWith(".embedhd.st") ||
       host.endsWith(".ppvservices.st") || host.endsWith(".pandecocogaming.sbs") ||
       host.endsWith(".getsugatensho.sbs")) return "PPV";
+  if (host === "dlstreams.st" || host.endsWith(".dlstreams.st") || host.endsWith(".romponalis.st")) return "DLStreams";
   return "";
 }
 
@@ -202,7 +204,7 @@ function sourceProvenanceErrors(rows) {
       const provider = String(source.provider || "");
       const embedProvider = String(source.embedProvider || "");
       const inferred = inferredWebProvider(source.embedUrl);
-      if (!["StreamCorner", "TimStreams", "PPV", "Sports Streams"].includes(provider)) {
+      if (!["StreamCorner", "TimStreams", "PPV", "Sports Streams", "DLStreams"].includes(provider)) {
         errors.push(`${game.id}: invalid provider ${provider || "<empty>"}`);
       }
       if (!String(source.name || "").startsWith(`${provider} • `)) {
@@ -350,7 +352,7 @@ async function inspectStreamCapabilities(source, provider = "") {
     // TimStreams already verifies the underlying live manifest before returning
     // its stable watch page. Other embedded providers are checked for an online
     // HTTPS response so dead event pages do not appear as selectable broadcasts.
-    if (provider === "timstreams") return source;
+    if (provider === "timstreams" || provider === "dlstreams") return source;
     try {
       const embedHost = runCatchingUrlHost(source.embedUrl);
       const isPpvSource = provider === "ppv" || source.name.startsWith("PPV •") ||
@@ -413,20 +415,22 @@ function isSupportedSportsEntry(game) {
 const tempDirectory = await mkdtemp(join(tmpdir(), "streamcorner-scrape-"));
 
 try {
-  async function loadPreviousTeams() {
-    try {
-      const previous = JSON.parse(await readFile(APP_FEED_OUTPUT, "utf8"));
-      return Array.isArray(previous.teams) ? previous.teams : [];
-    } catch {
+  let previousFeedPromise;
+  async function loadPreviousFeed() {
+    if (previousFeedPromise) return previousFeedPromise;
+    previousFeedPromise = (async () => {
+      try { return JSON.parse(await readFile(APP_FEED_OUTPUT, "utf8")); } catch { /* Try the deployed feed. */ }
       try {
         const response = await fetch(`${PREVIOUS_FEED_URL}?previous=${Date.now()}`, { signal: AbortSignal.timeout(15_000) });
-        if (!response.ok) return [];
-        const previous = await response.json();
-        return Array.isArray(previous.teams) ? previous.teams : [];
-      } catch {
-        return [];
-      }
-    }
+        return response.ok ? response.json() : {};
+      } catch { return {}; }
+    })();
+    return previousFeedPromise;
+  }
+
+  async function loadPreviousTeams() {
+    const previous = await loadPreviousFeed();
+    return Array.isArray(previous.teams) ? previous.teams : [];
   }
 
   async function fetchTeamCatalog() {
@@ -663,6 +667,15 @@ try {
   catalogCounts.ppv = ppv.catalogCount;
   if (ppv.error) console.warn(`PPV unavailable: ${ppv.error}`);
   games.push(...ppv.games.filter(isSupportedSportsEntry));
+  const dlStreams = await fetchDlStreamsGames(now);
+  catalogCounts.dlstreams = dlStreams.catalogCount;
+  if (dlStreams.error) console.warn(`DLStreams unavailable: ${dlStreams.error}`);
+  const retainedDlStreams = dlStreams.error
+    ? (Array.isArray((await loadPreviousFeed()).games) ? (await loadPreviousFeed()).games : [])
+        .filter((game) => game?.is24x7 && game?.sources?.some((source) => source.provider === "DLStreams"))
+    : [];
+  if (retainedDlStreams.length) catalogCounts.dlstreams = retainedDlStreams.length;
+  games.push(...(dlStreams.games.length ? dlStreams.games : retainedDlStreams).filter(isSupportedSportsEntry));
 
   const schedule = await fetchMajorLeagueSchedules(now);
   const scheduledGames = [...schedule.games, ...schedule.completed];
@@ -742,7 +755,7 @@ try {
   const addonPpvDuplicatesRemoved = await preferAddonOverPpv(games);
   games.forEach((game) => {
     const seen = new Set();
-    const rank = (source) => ({ StreamCorner: 0, "Sports Streams": 1, TimStreams: 2, PPV: 3 })[source.provider] ?? 4;
+    const rank = (source) => ({ StreamCorner: 0, "Sports Streams": 1, TimStreams: 2, PPV: 3, DLStreams: 4 })[source.provider] ?? 5;
     game.sources = game.sources.sort((a, b) => rank(a) - rank(b))
       .filter((source) => {
         const key = source.url ? `${source.url}:${source.clearKey}` : source.embedUrl;
@@ -792,6 +805,7 @@ try {
     timStreamsResolvedStreamCount: timStreams.resolvedStreamCount,
     ppvApiUrl: ppv.apiUrl,
     ppvPlayableCount: ppv.playableCount,
+    dlStreamsPlayableCount: dlStreams.playableCount,
     catalogCounts,
     gameCount: games.length,
     directStreamCount: directStreams.length,
@@ -815,6 +829,7 @@ try {
       decoderUrl,
       timStreamsResolvedStreamCount: timStreams.resolvedStreamCount,
       ppvPlayableCount: ppv.playableCount,
+      dlStreamsPlayableCount: dlStreams.playableCount,
       teamCount: teamCatalog.teams.length,
       scoreCount: schedule.scores.length,
       liveScoreCount: schedule.scores.filter((score) => score.state === "in").length,
@@ -837,6 +852,7 @@ try {
     decoderUrl,
     timStreamsResolvedStreamCount: timStreams.resolvedStreamCount,
     ppvPlayableCount: ppv.playableCount,
+    dlStreamsPlayableCount: dlStreams.playableCount,
     teamCount: teamCatalog.teams.length,
     scoreCount: schedule.scores.length,
     liveScoreCount: schedule.scores.filter((score) => score.state === "in").length,

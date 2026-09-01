@@ -1,6 +1,6 @@
 # StreamCorner TV feed
 
-Automatically refreshed owner-authorized StreamCorner, TimStreams, and PPV.st game and stream feed for the StreamCorner Android TV app.
+Automatically refreshed owner-authorized StreamCorner, TimStreams, PPV.st, Sports Streams, and DLStreams game and stream feed for the StreamCorner Android TV app.
 
 All event-based sports leagues from the three providers are retained in the feed. The Android app keeps profile favorite pickers separately restricted to its curated major-league catalog.
 

@@ -38,7 +38,7 @@ jobs:
           node-version: 24
 
       - name: Test provider mapping and duplicate preference
-        run: node --test tools/highfly.test.mjs tools/ppvstreams.test.mjs
+        run: node --test tools/highfly.test.mjs tools/dlstreams.test.mjs
 
       - name: Scrape current games and stream URLs
         env:
