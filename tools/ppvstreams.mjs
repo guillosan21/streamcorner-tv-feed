@@ -14,6 +14,22 @@ function displayLeague(tag, category) {
   return CANONICAL_LEAGUES.get(value.toUpperCase()) || value || String(category || "Sports").trim() || "Sports";
 }
 
+const NON_SPORTS_24X7_PATTERN = /\b(?:south\s*park|family\s*guys?|simpsons?|sponge\s*bob|cartoons?|movies?|cows?)\b/i;
+const SPORTS_24X7_PATTERN = /\b(?:espn\d*|fox\s+(?:sports|footy|cricket|league)|willow|rally\s*tv|nfl|nba|mlb|nhl|cricket|rugby|football|soccer|tennis|golf|motorsports?)\b/i;
+
+function isAlwaysLive(event) {
+  return event?.always_live === true || Number(event?.always_live) === 1;
+}
+
+function isSports24x7Event(event) {
+  if (!isAlwaysLive(event)) return false;
+  const searchable = [event?.name, event?.category, event?.category_name, event?.tag, event?.source_tag]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(" ");
+  return !NON_SPORTS_24X7_PATTERN.test(searchable) && SPORTS_24X7_PATTERN.test(searchable);
+}
+
 function eventTeams(title) {
   const cleanTeam = (value) => String(value || "").trim()
     .replace(/^\d+(?:st|nd|rd|th)\s+(?:test|round|leg|match)\s*[-:|]\s*/i, "")
@@ -56,18 +72,23 @@ export async function fetchPpvGames(now) {
       .map((event) => ({ ...event, category: String(category?.category || event?.category_name || "Sports") })));
     const nowSeconds = Math.floor(now.getTime() / 1000);
     const games = events.map((event) => {
-      const league = displayLeague(event?.tag, event?.category);
+      const alwaysLive = isAlwaysLive(event);
+      const league = alwaysLive
+        ? String(event?.category || "24/7 Sports").trim() || "24/7 Sports"
+        : displayLeague(event?.tag, event?.category);
       const startsAt = Number(event?.starts_at || 0);
       const endsAt = Number(event?.ends_at || 0);
       const embedUrl = safeEmbedUrl(event);
-      if (!startsAt || !endsAt || endsAt <= nowSeconds || !embedUrl || event?.always_live === true || Number(event?.always_live) === 1) return null;
+      if (!embedUrl || (alwaysLive ? !isSports24x7Event(event) : (!startsAt || !endsAt || endsAt <= nowSeconds))) return null;
       const title = String(event?.name || "PPV event").trim();
       const teams = eventTeams(title);
+      const effectiveStartsAt = alwaysLive ? nowSeconds - 60 : startsAt;
+      const effectiveEndsAt = alwaysLive ? nowSeconds + (24 * 60 * 60) : endsAt;
       return {
         id: `ppv-${String(event?.id || event?.uri_name || startsAt)}`, provider: "ppv", sourceId: String(event?.id || ""),
         title, league, sport: String(event?.category || "Sports").trim(),
-        startsAt: new Date(startsAt * 1000).toISOString(), endsAt: new Date(endsAt * 1000).toISOString(),
-        status: startsAt > nowSeconds ? "upcoming" : "live", is24x7: false,
+        startsAt: new Date(effectiveStartsAt * 1000).toISOString(), endsAt: new Date(effectiveEndsAt * 1000).toISOString(),
+        status: alwaysLive ? "live" : (startsAt > nowSeconds ? "upcoming" : "live"), is24x7: alwaysLive,
         homeTeam: teams.homeTeam, awayTeam: teams.awayTeam, homeLogoUrl: "", awayLogoUrl: "",
         posterUrl: String(event?.poster || "").trim().replace(/^http:/, "https:"), categoryLogoUrl: "", venue: "",
         sources: [{ provider: "PPV", embedProvider: "PPV", name: `PPV • ${String(event?.source_tag || "Web feed").trim()}`, url: "", clearKey: "", embedUrl, headers: { Referer: PPV_SITE } }],
@@ -79,4 +100,4 @@ export async function fetchPpvGames(now) {
   }
 }
 
-export const __testing = { displayLeague, eventTeams, safeEmbedUrl };
+export const __testing = { displayLeague, eventTeams, isAlwaysLive, isSports24x7Event, safeEmbedUrl };
