@@ -1,5 +1,8 @@
 const DLSTREAMS_SITE = "https://dlstreams.st/";
 const DLSTREAMS_CATALOG = new URL("24-7-channels.php", DLSTREAMS_SITE).href;
+const CHANNEL_LOGOS = JSON.parse(await import("node:fs/promises").then(({ readFile }) =>
+  readFile(new URL("./dlstreams-logos.json", import.meta.url), "utf8"),
+));
 
 const NON_SPORTS_PATTERN = /\b(?:adult|cartoon|cinema|comedy|documentary|family|food|kids?|movies?|music|news|reality|science|showtime|starz|weather)\b/i;
 const SPORTS_CHANNEL_PATTERN = new RegExp([
@@ -66,6 +69,11 @@ const GROUP_PRIORITY = new Map([
 function compareChannels(left, right) {
   const groupDifference = (GROUP_PRIORITY.get(left.group) ?? 99) - (GROUP_PRIORITY.get(right.group) ?? 99);
   return groupDifference || left.name.localeCompare(right.name, "en", { numeric: true, sensitivity: "base" });
+}
+
+function channelLogoUrl(id) {
+  const value = String(CHANNEL_LOGOS[String(id)] || "");
+  return /^https:\/\//i.test(value) ? value : "";
 }
 
 function parseChannels(html) {
@@ -146,7 +154,7 @@ export async function fetchDlStreamsGames(now) {
         homeLogoUrl: "",
         awayLogoUrl: "",
         posterUrl: "",
-        categoryLogoUrl: "",
+        categoryLogoUrl: channelLogoUrl(channel.id),
         venue: "",
         sources: [{
           provider: "DLStreams",
@@ -171,4 +179,4 @@ export async function fetchDlStreamsGames(now) {
   }
 }
 
-export const __testing = { channelGroup, compareChannels, decodeHtml, isSportsChannel, parseChannels, parsePlayerTemplate };
+export const __testing = { channelGroup, channelLogoUrl, compareChannels, decodeHtml, isSportsChannel, parseChannels, parsePlayerTemplate };

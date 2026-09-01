@@ -49,3 +49,9 @@ test("extracts only the validated provider player route", () => {
   );
   assert.equal(__testing.parsePlayerTemplate(html, "45"), "");
 });
+
+test("ships verified high-resolution channel artwork", () => {
+  assert.match(__testing.channelLogoUrl("44"), /^https:\/\/.+/); // ESPN USA
+  assert.match(__testing.channelLogoUrl("935"), /^https:\/\/.+/); // TUDN MX
+  assert.equal(__testing.channelLogoUrl("not-a-channel"), "");
+});
