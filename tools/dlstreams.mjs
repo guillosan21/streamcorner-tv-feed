@@ -76,6 +76,18 @@ function channelLogoUrl(id) {
   return /^https:\/\//i.test(value) ? value : "";
 }
 
+function channelPlayerUrl(id) {
+  const channelId = String(id || "").trim();
+  if (!/^\d+$/.test(channelId)) return "";
+  return new URL(`stream/stream-${channelId}.php`, DLSTREAMS_SITE).href;
+}
+
+function channelPlayerHeaders(id) {
+  const channelId = String(id || "").trim();
+  if (!/^\d+$/.test(channelId)) return {};
+  return { Referer: new URL(`watch.php?id=${channelId}`, DLSTREAMS_SITE).href };
+}
+
 function parseChannels(html) {
   const channels = [];
   const seen = new Set();
@@ -133,8 +145,12 @@ export async function fetchDlStreamsGames(now) {
       signal: AbortSignal.timeout(20_000),
     });
     if (!probeResponse.ok) throw new Error(`player route returned HTTP ${probeResponse.status}`);
-    const playerTemplate = parsePlayerTemplate(await probeResponse.text(), probe.id);
-    if (!playerTemplate) throw new Error("player route validation failed");
+    // Validate that the provider wrapper currently resolves a real player, but do not
+    // reuse that nested host for every channel. DLStreams can assign different active
+    // player routes per channel and rotate them independently (for example daddy2 vs
+    // daddy3). Loading each stable wrapper lets the provider select its live route.
+    const probePlayerUrl = parsePlayerTemplate(await probeResponse.text(), probe.id);
+    if (!probePlayerUrl) throw new Error("player route validation failed");
 
     const nowSeconds = Math.floor(now.getTime() / 1000);
     const games = channels.map((channel) => {
@@ -162,8 +178,8 @@ export async function fetchDlStreamsGames(now) {
           name: `DLStreams • ${channel.name}`,
           url: "",
           clearKey: "",
-          embedUrl: playerTemplate.replace("__CHANNEL_ID__", channel.id),
-          headers: { Referer: new URL(`stream/stream-${channel.id}.php`, DLSTREAMS_SITE).href },
+          embedUrl: channelPlayerUrl(channel.id),
+          headers: channelPlayerHeaders(channel.id),
         }],
       };
     });
@@ -179,4 +195,7 @@ export async function fetchDlStreamsGames(now) {
   }
 }
 
-export const __testing = { channelGroup, channelLogoUrl, compareChannels, decodeHtml, isSportsChannel, parseChannels, parsePlayerTemplate };
+export const __testing = {
+  channelGroup, channelLogoUrl, channelPlayerHeaders, channelPlayerUrl, compareChannels,
+  decodeHtml, isSportsChannel, parseChannels, parsePlayerTemplate,
+};

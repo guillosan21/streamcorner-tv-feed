@@ -50,6 +50,13 @@ test("extracts only the validated provider player route", () => {
   assert.equal(__testing.parsePlayerTemplate(html, "45"), "");
 });
 
+test("uses each channel's stable wrapper instead of sharing another channel's nested player", () => {
+  assert.equal(__testing.channelPlayerUrl("66"), "https://dlstreams.st/stream/stream-66.php");
+  assert.deepEqual(__testing.channelPlayerHeaders("66"), { Referer: "https://dlstreams.st/watch.php?id=66" });
+  assert.equal(__testing.channelPlayerUrl("bad-id"), "");
+  assert.deepEqual(__testing.channelPlayerHeaders("bad-id"), {});
+});
+
 test("ships verified high-resolution channel artwork", () => {
   assert.match(__testing.channelLogoUrl("44"), /^https:\/\/.+/); // ESPN USA
   assert.match(__testing.channelLogoUrl("935"), /^https:\/\/.+/); // TUDN MX
