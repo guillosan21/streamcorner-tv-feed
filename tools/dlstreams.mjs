@@ -88,6 +88,56 @@ function channelPlayerHeaders(id) {
   return { Referer: new URL(`watch.php?id=${channelId}`, DLSTREAMS_SITE).href };
 }
 
+// ESPN's scoreboard uses short broadcast labels (for example "NFL Net", "MLB Net",
+// "FS1", "YES" and "SportsNet LA") while the 24/7 catalog uses full channel names.
+// Keep this mapping deliberately exact: substring/fuzzy matching could silently attach
+// ESPN+ to ESPN, a local FOX affiliate to FS1, or a channel from the wrong country.
+const ESPN_BROADCAST_ALIASES = new Map([
+  ["acc network", "acc network"],
+  ["big ten network", "big ten network"], ["btn", "big ten network"],
+  ["cbs sports network", "cbs sports network"], ["cbssn", "cbs sports network"],
+  ["chicago sports network", "chicago sports network"], ["chsn", "chicago sports network"],
+  ["espn", "espn"], ["espn2", "espn2"], ["espn deportes", "espn deportes"],
+  ["espnews", "espnews"], ["espnu", "espnu"],
+  ["fox sports 1", "fox sports 1"], ["fs1", "fox sports 1"],
+  ["fox sports 2", "fox sports 2"], ["fs2", "fox sports 2"],
+  ["golf channel", "golf channel"],
+  ["masn", "masn"], ["mlb net", "mlb network"], ["mlb network", "mlb network"],
+  ["nba tv", "nba tv"], ["nesn", "nesn"],
+  ["nfl net", "nfl network"], ["nfl network", "nfl network"],
+  ["nhl network", "nhl network"], ["sec network", "sec network"],
+  ["sny", "sny"], ["sportsnet la", "spectrum sportsnet la"],
+  ["sportsnet pittsburgh", "sportsnet pittsburgh"],
+  ["tennis channel", "tennis channel"], ["tudn", "tudn"],
+  ["willow", "willow cricket"], ["yes", "yes network"], ["yes network", "yes network"],
+]);
+
+function broadcastChannelKey(value) {
+  if (/espn\s*\+/i.test(decodeHtml(value))) return "";
+  const normalized = decodeHtml(value).normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()
+    .replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").trim();
+  if (!normalized || normalized.includes("espn plus")) return "";
+  return ESPN_BROADCAST_ALIASES.get(normalized) || "";
+}
+
+function catalogBroadcastKey(value) {
+  const normalized = decodeHtml(value).normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()
+    .replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ")
+    .replace(/\b(?:usa|us)\b/g, " ").replace(/\s+/g, " ").trim();
+  if (/^espn \d+ mx$/.test(normalized) || /\b(?:mx|canada|uk)\b/.test(normalized)) return "";
+  if (normalized === "spectrum sportsnet usa") return "";
+  if (normalized === "sportsnet new york sny") return "sny";
+  if (normalized === "big ten network btn") return "big ten network";
+  if (normalized === "cbs sports network cbssn") return "cbs sports network";
+  return ESPN_BROADCAST_ALIASES.get(normalized) || normalized;
+}
+
+function findBroadcastChannelGames(broadcastNames, channelGames) {
+  const wanted = new Set((broadcastNames || []).map(broadcastChannelKey).filter(Boolean));
+  if (!wanted.size) return [];
+  return (channelGames || []).filter((game) => game?.is24x7 && wanted.has(catalogBroadcastKey(game.title)));
+}
+
 function parseChannels(html) {
   const channels = [];
   const seen = new Set();
@@ -196,6 +246,9 @@ export async function fetchDlStreamsGames(now) {
 }
 
 export const __testing = {
-  channelGroup, channelLogoUrl, channelPlayerHeaders, channelPlayerUrl, compareChannels,
-  decodeHtml, isSportsChannel, parseChannels, parsePlayerTemplate,
+  broadcastChannelKey, catalogBroadcastKey, channelGroup, channelLogoUrl, channelPlayerHeaders,
+  channelPlayerUrl, compareChannels, decodeHtml, findBroadcastChannelGames, isSportsChannel,
+  parseChannels, parsePlayerTemplate,
 };
+
+export { findBroadcastChannelGames };

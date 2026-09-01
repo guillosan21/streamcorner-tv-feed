@@ -72,3 +72,18 @@ test("ships verified high-resolution channel artwork", () => {
   assert.match(__testing.channelLogoUrl("935"), /^https:\/\/.+/); // TUDN MX
   assert.equal(__testing.channelLogoUrl("not-a-channel"), "");
 });
+
+test("matches ESPN broadcast names to exact US 24/7 channels without regional or ESPN+ false positives", () => {
+  const channels = [
+    { title: "ESPN USA", is24x7: true },
+    { title: "ESPN 1 MX", is24x7: true },
+    { title: "NFL Network", is24x7: true },
+    { title: "Spectrum Sportsnet LA", is24x7: true },
+    { title: "Chicago Sports Network", is24x7: true },
+  ];
+  assert.deepEqual(
+    __testing.findBroadcastChannelGames(["ESPN", "NFL Net", "SportsNet LA", "CHSN"], channels).map((game) => game.title),
+    ["ESPN USA", "NFL Network", "Spectrum Sportsnet LA", "Chicago Sports Network"],
+  );
+  assert.deepEqual(__testing.findBroadcastChannelGames(["ESPN+", "FOX32", "CBS4"], channels), []);
+});

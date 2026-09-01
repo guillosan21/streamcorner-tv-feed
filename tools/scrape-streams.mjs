@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { fetchTimStreamsGames } from "./timstreams.mjs";
 import { fetchPpvGames } from "./ppvstreams.mjs";
-import { fetchDlStreamsGames } from "./dlstreams.mjs";
+import { fetchDlStreamsGames, findBroadcastChannelGames } from "./dlstreams.mjs";
 import { fetchHighflyGames, attachAddonSources, preferAddonOverPpv } from "./highfly.mjs";
 
 const SITE_URL = "https://streamcorner.st/";
@@ -309,6 +309,9 @@ async function fetchMajorLeagueSchedules(now) {
         const homeScore = String(home.score ?? "").trim();
         const awayScore = String(away.score ?? "").trim();
         const scoreDetail = String(event?.status?.type?.shortDetail || event?.status?.type?.detail || event?.status?.displayClock || "").trim();
+        const espnBroadcasts = [...new Set((Array.isArray(competition.broadcasts) ? competition.broadcasts : [])
+          .flatMap((broadcast) => Array.isArray(broadcast?.names) ? broadcast.names : [])
+          .map((name) => String(name || "").trim()).filter(Boolean))];
         const scheduledGame = {
           id: `espn-${league.id.toLowerCase()}-${event.id}`,
           provider: "espn-schedule",
@@ -318,6 +321,7 @@ async function fetchMajorLeagueSchedules(now) {
           status: scheduleState === "in" ? "live" : "upcoming", scheduleState, is24x7: false,
           scoreboardLeagueId: league.id,
           scoreboardEventId: event.id ? `espn-${league.id.toLowerCase()}-${event.id}` : "",
+          espnBroadcasts,
           homeScore, awayScore, scoreDetail,
           homeTeam, awayTeam,
           homeLogoUrl: String(home.team?.logo || "").replace(/^http:/, "https:"),
@@ -352,7 +356,7 @@ async function inspectStreamCapabilities(source, provider = "") {
     // TimStreams already verifies the underlying live manifest before returning
     // its stable watch page. Other embedded providers are checked for an online
     // HTTPS response so dead event pages do not appear as selectable broadcasts.
-    if (provider === "timstreams" || provider === "dlstreams") return source;
+    if (provider === "timstreams" || provider === "dlstreams" || source.provider === "DLStreams") return source;
     try {
       const embedHost = runCatchingUrlHost(source.embedUrl);
       const isPpvSource = provider === "ppv" || source.name.startsWith("PPV •") ||
@@ -716,6 +720,7 @@ try {
         match.homeScore = scheduled.homeScore;
         match.awayScore = scheduled.awayScore;
         match.scoreDetail = scheduled.scoreDetail;
+        match.espnBroadcasts = scheduled.espnBroadcasts;
       }
     } else if (scheduled.scheduleState !== "post") {
       games.push(scheduled);
@@ -735,6 +740,22 @@ try {
         ((similarTeam(sides[0], other[0]) && similarTeam(sides[1], other[1])) ||
          (similarTeam(sides[0], other[1]) && similarTeam(sides[1], other[0])));
   });
+  let espnBroadcastSourceCount = 0;
+  const channelGames = games.filter((game) => game.is24x7 && game.sources?.some((source) => source.provider === "DLStreams"));
+  for (const game of games) {
+    if (game.is24x7 || !Array.isArray(game.espnBroadcasts) || !game.espnBroadcasts.length) continue;
+    for (const channel of findBroadcastChannelGames(game.espnBroadcasts, channelGames)) {
+      for (const source of channel.sources || []) {
+        const key = source.url ? `${source.url}:${source.clearKey}` : source.embedUrl;
+        const exists = (game.sources || []).some((candidate) =>
+          candidate.url ? `${candidate.url}:${candidate.clearKey}` === key : candidate.embedUrl === key);
+        if (!exists) {
+          game.sources.push({ ...source });
+          espnBroadcastSourceCount += 1;
+        }
+      }
+    }
+  }
   const collapsedPpvMirrorCount = collapsePpvMirrors(games);
   const duplicateEventPairCount = countRemainingDuplicatePairs(games);
   if (duplicateEventPairCount > 0) throw new Error(`feed still contains ${duplicateEventPairCount} mergeable duplicate event pair(s)`);
@@ -796,6 +817,7 @@ try {
     highflyCatalogCount: highfly.catalogCount,
     highflySourceCount: games.flatMap((game) => game.sources).filter((source) => source.provider === "Sports Streams").length,
     addonPpvDuplicatesRemoved,
+    espnBroadcastSourceCount,
     ambiguousAddonEvents: addonMatches.ambiguous,
     unmatchedAddonEvents: addonMatches.unmatched,
     highflyErrors: highfly.errors,
@@ -838,6 +860,7 @@ try {
       collapsedPpvMirrorCount,
       highflySourceCount: games.flatMap((game) => game.sources).filter((source) => source.provider === "Sports Streams").length,
       addonPpvDuplicatesRemoved,
+      espnBroadcastSourceCount,
       unmatchedAddonEvents: addonMatches.unmatched,
       highflyErrors: highfly.errors,
       teamCatalogErrors: teamCatalog.errors,
@@ -861,6 +884,7 @@ try {
     collapsedPpvMirrorCount,
     highflySourceCount: games.flatMap((game) => game.sources).filter((source) => source.provider === "Sports Streams").length,
     addonPpvDuplicatesRemoved,
+    espnBroadcastSourceCount,
     unmatchedAddonEvents: addonMatches.unmatched,
     highflyErrors: highfly.errors,
     teamCatalogErrors: teamCatalog.errors,
