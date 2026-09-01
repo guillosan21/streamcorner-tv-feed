@@ -40,6 +40,16 @@ test("groups Mexico and international channels without changing their names", ()
   assert.equal(__testing.channelGroup("beIN Sports MENA English 1"), "Middle East & Africa Sports");
 });
 
+test("classifies regional channels by their actual market", () => {
+  for (const name of ["ESPN Deportes", "ESPNews", "Spectrum Sportsnet LA", "SportsNet Pittsburgh", "Chicago Sports Network", "Willow Cricket"]) {
+    assert.equal(__testing.channelGroup(name), "United States Sports", name);
+  }
+  assert.equal(__testing.channelGroup("Sportsnet Ontario"), "Canada Sports");
+  assert.equal(__testing.channelGroup("TVA Sports"), "Canada Sports");
+  assert.equal(__testing.channelGroup("Sky Sports Golf Italy"), "Europe Sports");
+  assert.equal(__testing.channelGroup("Sky Sport 1 NZ"), "Asia Pacific Sports");
+});
+
 test("extracts only the validated provider player route", () => {
   const html = '<iframe src="https://ads.example/player?id=44"></iframe>' +
     '<iframe src="https://hamis.romponalis.st/premiumtv/daddy3.php?id=44"></iframe>';

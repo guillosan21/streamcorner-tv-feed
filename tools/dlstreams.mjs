@@ -43,14 +43,14 @@ function isSportsChannel(name) {
 
 function channelGroup(name) {
   const value = String(name || "");
-  if (/\b(?:USA|US)\b|ESPN(?:2|U|ews)? USA|Fox Sports [12] USA|(?:NFL|MLB|NHL) Network|NBA TV|ACC Network|SEC Network|Big Ten Network|CBS Sports|Golf Channel|Tennis Channel|YES Network|SNY|NESN|MASN|FanDuel Sports|Root Sports|Space City Home Network|Monumental Sports/i.test(value)) return "United States Sports";
+  if (/\b(?:USA|US)\b|ESPN Deportes|ESPNews|beIN SPORTS (?:en Espa[nñ]ol|XTRA)|Altitude Sports|Chicago Sports Network|Spectrum SportsNet(?: LA)?|SportsNet Pittsburgh|Willow(?: 2)? Cricket|(?:NFL|MLB|NHL) Network|NBA TV|ACC Network|SEC Network|Big Ten Network|CBS Sports|Golf Channel|Tennis Channel|YES Network|SNY|NESN|MASN|FanDuel Sports|Root Sports|Space City Home Network|Monumental Sports/i.test(value)) return "United States Sports";
   if (/\bMX\b|Mexico/i.test(value)) return "Mexico Sports";
-  if (/\b(?:CA|Canada)\b|TSN\d?|Sportsnet/i.test(value)) return "Canada Sports";
-  if (/\bUK\b|TNT Sports [1-9]|Sky Sports/i.test(value)) return "United Kingdom Sports";
+  if (/\b(?:CA|Canada)\b|TSN\d?|Sportsnet|TVA Sports/i.test(value)) return "Canada Sports";
   if (/Argentina|Brasil|Brazil|Chile|Colombia|Columbia|Uruguay/i.test(value)) return "Latin America Sports";
   if (/MENA|Arabic|Qatar|UAE|Afrique|Africa|SSC Sport|Alkass/i.test(value)) return "Middle East & Africa Sports";
-  if (/Australia|Malaysia|India|\bIN\b|\bPK\b|Turkey/i.test(value)) return "Asia Pacific Sports";
+  if (/Australia|\bAU\b|Malaysia|Astro|India|\bIN\b|\bPK\b|Turkey|\bNZ\b|New Zealand/i.test(value)) return "Asia Pacific Sports";
   if (/France|Germany|\bDE\b|Spain|Poland|Portugal|Netherland|\bNL\b|Serbia|Croatia|Greece|Italy|Sweden|Denmark|Norway|CZ|SK|Bulgaria|Romania/i.test(value)) return "Europe Sports";
+  if (/\bUK\b|TNT Sports [1-9]|Sky Sports/i.test(value)) return "United Kingdom Sports";
   return "International Sports";
 }
 
