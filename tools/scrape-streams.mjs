@@ -7,7 +7,7 @@ import { fetchPpvGames } from "./ppvstreams.mjs";
 import { fetchDlStreamsGames, findBroadcastChannelGames } from "./dlstreams.mjs";
 import { fetchHighflyGames, attachAddonSources, preferAddonOverPpv } from "./highfly.mjs";
 import { feedSourceKey, isValidPizarraMxSourceRef } from "./playback-identity.mjs";
-import { assertDecoderFallbackHasTrustedBaseline, loadTrustedFeedBaseline } from "./feed-baseline.mjs";
+import { assessStreamCornerDecoderFallback, loadTrustedFeedBaseline } from "./feed-baseline.mjs";
 import { compareFeedSourceCoverage } from "./feed-safety.mjs";
 import { assertSufficientEspnScheduleCoverage, espnLiveScheduleDates, espnScheduleDates, fetchEspnSchedules } from "./espn-schedules.mjs";
 import { fetchPizarraMxGames, retainPreviousPizarraMxGames } from "./pizarramx.mjs";
@@ -874,9 +874,13 @@ try {
   }
 
   let streamCornerMissingPriorSourceCount = 0;
+  let streamCornerCoverageDegraded = false;
+  let streamCornerBaselineStale = false;
+  let streamCornerBaselineAgeMs = null;
+  let streamCornerEnforcedMissingSourceThreshold = null;
+  const streamCornerCatalogCounts = Object.fromEntries(providers.map((provider) => [provider, catalogCounts[provider] || 0]));
   if (decoderError) {
     const previousFeed = await loadPreviousFeed();
-    assertDecoderFallbackHasTrustedBaseline(decoderError, previousFeedTrusted);
     const missingSources = missingPreviousStreamCornerSources(previousFeed, games, now);
     streamCornerMissingPriorSourceCount = missingSources.length;
     const previousActiveCount = new Set(
@@ -885,9 +889,20 @@ try {
         .flatMap((game) => (game.sources || []).filter((source) => source?.provider === "StreamCorner").map(feedSourceKey))
         .filter(Boolean),
     ).size;
-    const materialLossThreshold = Math.max(5, Math.ceil(previousActiveCount * 0.2));
-    if (missingSources.length >= materialLossThreshold) {
-      throw new Error(`StreamCorner decoder unavailable; refusing feed with ${missingSources.length} of ${previousActiveCount} still-active prior StreamCorner sources missing`);
+    const decoderFallback = assessStreamCornerDecoderFallback({
+      decoderError,
+      baselineTrusted: previousFeedTrusted,
+      baselineUpdatedAt: previousFeed.updatedAt,
+      missingSourceCount: missingSources.length,
+      previousActiveCount,
+      now,
+    });
+    streamCornerCoverageDegraded = decoderFallback.degraded;
+    streamCornerBaselineStale = decoderFallback.staleBaseline;
+    streamCornerBaselineAgeMs = decoderFallback.baselineAgeMs;
+    streamCornerEnforcedMissingSourceThreshold = decoderFallback.enforcedMissingSourceThreshold;
+    if (decoderFallback.staleBaseline) {
+      console.warn(`StreamCorner decoder unavailable; trusted baseline is ${Math.round(decoderFallback.baselineAgeMs / 60_000)} minutes old, so prior direct-source identities are unverified and are not used as a strict loss gate`);
     }
   }
 
@@ -917,6 +932,11 @@ try {
     sourceCoverage,
     scheduleCoverage: schedule.scheduleCoverage,
     streamCornerErrors,
+    streamCornerCatalogCounts,
+    streamCornerCoverageDegraded,
+    streamCornerBaselineStale,
+    streamCornerBaselineAgeMs,
+    streamCornerEnforcedMissingSourceThreshold,
     streamCornerMissingPriorSourceCount,
     pizarramxError: pizarraMx.error,
     pizarramxRetainedGameCount,
@@ -958,6 +978,11 @@ try {
       sourceCoverage,
       scheduleCoverage: schedule.scheduleCoverage,
       streamCornerErrors,
+      streamCornerCatalogCounts,
+      streamCornerCoverageDegraded,
+      streamCornerBaselineStale,
+      streamCornerBaselineAgeMs,
+      streamCornerEnforcedMissingSourceThreshold,
       streamCornerMissingPriorSourceCount,
       pizarramxError: pizarraMx.error,
       pizarramxRetainedGameCount,
@@ -983,6 +1008,11 @@ try {
     sourceCoverage,
     scheduleCoverage: schedule.scheduleCoverage,
     streamCornerErrors,
+    streamCornerCatalogCounts,
+    streamCornerCoverageDegraded,
+    streamCornerBaselineStale,
+    streamCornerBaselineAgeMs,
+    streamCornerEnforcedMissingSourceThreshold,
     streamCornerMissingPriorSourceCount,
     pizarramxError: pizarraMx.error,
     pizarramxRetainedGameCount,

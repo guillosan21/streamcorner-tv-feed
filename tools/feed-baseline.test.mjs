@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  assessStreamCornerDecoderFallback,
   assertDecoderFallbackHasTrustedBaseline,
   isTrustedFeedBaseline,
   loadTrustedFeedBaseline,
@@ -95,4 +96,57 @@ test("valid local baseline avoids a remote request", async () => {
   assert.equal(result.source, "local");
   assert.equal(isTrustedFeedBaseline(trustedFeed), true);
   assert.doesNotThrow(() => assertDecoderFallbackHasTrustedBaseline("HTTP 403", result.trusted));
+  const assessment = assessStreamCornerDecoderFallback({
+    decoderError: "HTTP 403",
+    baselineTrusted: result.trusted,
+    baselineUpdatedAt: "2026-09-27T08:55:00.000Z",
+    missingSourceCount: 2,
+    previousActiveCount: 15,
+    now: new Date("2026-09-27T09:00:00.000Z"),
+  });
+  assert.equal(assessment.staleBaseline, false);
+  assert.equal(assessment.enforcedMissingSourceThreshold, 5);
+});
+
+test("recent trusted StreamCorner baseline strictly blocks 15 missing active source keys", () => {
+  const now = new Date("2026-09-27T09:00:00.000Z");
+  assert.throws(() => assessStreamCornerDecoderFallback({
+    decoderError: "HTTP 403",
+    baselineTrusted: true,
+    baselineUpdatedAt: "2026-09-27T08:55:00.000Z",
+    missingSourceCount: 15,
+    previousActiveCount: 15,
+    now,
+  }), /15 of 15 still-active prior StreamCorner sources missing/);
+});
+
+test("stale trusted baseline skips only decoder-specific source assertion and reports degradation", () => {
+  const now = new Date("2026-09-27T09:00:00.000Z");
+  const result = assessStreamCornerDecoderFallback({
+    decoderError: "HTTP 403",
+    baselineTrusted: true,
+    baselineUpdatedAt: "2026-09-24T05:00:00.000Z",
+    missingSourceCount: 15,
+    previousActiveCount: 15,
+    now,
+  });
+
+  assert.equal(result.degraded, true);
+  assert.equal(result.staleBaseline, true);
+  assert.equal(result.baselineAgeMs, 76 * 60 * 60 * 1000);
+  assert.equal(result.missingSourceCount, 15);
+  assert.equal(result.enforcedMissingSourceThreshold, null);
+});
+
+test("decoder outage fails closed for untrusted, invalid-time, and future-time baselines", () => {
+  const now = new Date("2026-09-27T09:00:00.000Z");
+  const common = { decoderError: "HTTP 403", now, missingSourceCount: 15, previousActiveCount: 15 };
+  assert.throws(() => assessStreamCornerDecoderFallback({
+    ...common, baselineTrusted: false, baselineUpdatedAt: "2026-09-27T08:55:00.000Z",
+  }), /no trusted previous feed baseline/);
+  for (const baselineUpdatedAt of ["not-a-date", "2026-09-27T09:00:01.000Z"]) {
+    assert.throws(() => assessStreamCornerDecoderFallback({
+      ...common, baselineTrusted: true, baselineUpdatedAt,
+    }), /timestamp is invalid or in the future/);
+  }
 });
