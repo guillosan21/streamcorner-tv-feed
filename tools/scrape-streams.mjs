@@ -6,6 +6,11 @@ import { fetchTimStreamsGames } from "./timstreams.mjs";
 import { fetchPpvGames } from "./ppvstreams.mjs";
 import { fetchDlStreamsGames, findBroadcastChannelGames } from "./dlstreams.mjs";
 import { fetchHighflyGames, attachAddonSources, preferAddonOverPpv } from "./highfly.mjs";
+import { feedSourceKey, isValidPizarraMxSourceRef } from "./playback-identity.mjs";
+import { assertDecoderFallbackHasTrustedBaseline, loadTrustedFeedBaseline } from "./feed-baseline.mjs";
+import { compareFeedSourceCoverage } from "./feed-safety.mjs";
+import { assertSufficientEspnScheduleCoverage, espnLiveScheduleDates, espnScheduleDates, fetchEspnSchedules } from "./espn-schedules.mjs";
+import { fetchPizarraMxGames, retainPreviousPizarraMxGames } from "./pizarramx.mjs";
 
 const SITE_URL = "https://streamcorner.st/";
 const DEFAULT_DECODER_URL = "https://streamcorner.st/assets/BjKHyKrh.js";
@@ -83,10 +88,6 @@ function estimatedDurationSeconds(title, league, sport) {
   return 8 * 60 * 60;
 }
 
-function compactDate(date) {
-  return date.toISOString().slice(0, 10).replaceAll("-", "");
-}
-
 function canonicalTeam(value) {
   return String(value || "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()
     .replace(/\bchiacgo\b/g, "chicago")
@@ -149,10 +150,9 @@ function deduplicateFeedGames(rows) {
       merged.push(game);
       continue;
     }
-    const sourceKeys = new Set(existing.sources.map((source) => source.url
-      ? `direct:${source.url}:${source.clearKey}` : `web:${source.embedUrl}`));
+    const sourceKeys = new Set(existing.sources.map(feedSourceKey));
     for (const source of game.sources) {
-      const key = source.url ? `direct:${source.url}:${source.clearKey}` : `web:${source.embedUrl}`;
+      const key = feedSourceKey(source);
       if (!sourceKeys.has(key)) { existing.sources.push(source); sourceKeys.add(key); }
     }
     const authority = (row) => (row.scoreboardLeagueId ? 8 : 0) + (row.scheduleState ? 4 : 0) +
@@ -204,11 +204,17 @@ function sourceProvenanceErrors(rows) {
       const provider = String(source.provider || "");
       const embedProvider = String(source.embedProvider || "");
       const inferred = inferredWebProvider(source.embedUrl);
-      if (!["StreamCorner", "TimStreams", "PPV", "Sports Streams", "DLStreams"].includes(provider)) {
+      const rawProviderRef = String(source.providerSourceRef || "");
+      const isPizarraRef = provider === "Pizarra MX" && rawProviderRef === rawProviderRef.trim() &&
+        isValidPizarraMxSourceRef(rawProviderRef);
+      if (!["StreamCorner", "TimStreams", "PPV", "Sports Streams", "DLStreams", "Pizarra MX"].includes(provider)) {
         errors.push(`${game.id}: invalid provider ${provider || "<empty>"}`);
       }
       if (!String(source.name || "").startsWith(`${provider} • `)) {
         errors.push(`${game.id}: label ${source.name || "<empty>"} disagrees with ${provider || "<empty>"}`);
+      }
+      if (provider === "Pizarra MX" && (!isPizarraRef || source.url || source.embedUrl || Object.keys(source.headers || {}).length)) {
+        errors.push(`${game.id}: Pizarra MX source must be an exact opaque ref without published transport state`);
       }
       if (inferred && embedProvider !== inferred) {
         errors.push(`${game.id}: ${source.embedUrl} has embedProvider=${embedProvider || "<empty>"}, expected ${inferred}`);
@@ -272,20 +278,27 @@ async function fetchEspnEventVenue(league, eventId) {
 
 async function fetchMajorLeagueSchedules(now) {
   const historyStart = new Date(now.getTime() - 4 * 24 * 60 * 60 * 1000);
-  const end = new Date(now.getTime() + 45 * 24 * 60 * 60 * 1000);
-  const dates = `${compactDate(historyStart)}-${compactDate(end)}`;
+  const scheduleDates = espnScheduleDates(now);
+  const liveScheduleDates = espnLiveScheduleDates(now);
+  const scheduleResults = await fetchEspnSchedules(scheduleLeagues, scheduleDates, {
+    liveOnlyDates: liveScheduleDates,
+    concurrency: 12,
+    timeoutMs: 8_000,
+    maxTotalRequests: 1_000,
+    scheduleBudgetMs: 150_000,
+    minRequestIntervalMs: 125,
+    transientRetries: 1,
+    onProgress: ({ completed: count, total, requests }) => {
+      if (count % 20 === 0 || count === total) console.log(`ESPN daily schedules: ${count}/${total} dates (${requests} requests)`);
+    },
+  });
+  const scheduleCoverage = assertSufficientEspnScheduleCoverage(scheduleLeagues, scheduleDates, scheduleResults);
   const games = [];
   const scores = [];
   const completed = [];
-  for (const league of scheduleLeagues) {
-    try {
-      const leagueDates = league.liveOnly ? `${compactDate(new Date(now.getTime() - 24 * 60 * 60_000))}-${compactDate(now)}` : dates;
-      const response = await fetch(`${ESPN_SITE_API}/${league.path}/scoreboard?dates=${leagueDates}&limit=1000${league.group ? `&groups=${league.group}` : ""}`, {
-        headers: { Accept: "application/json", "User-Agent": "StreamCorner-TV-Feed/1.3" }, signal: AbortSignal.timeout(25_000),
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const payload = await response.json();
-      for (const event of Array.isArray(payload?.events) ? payload.events : []) {
+  for (const [leagueIndex, league] of scheduleLeagues.entries()) {
+      const events = scheduleResults[leagueIndex]?.events || [];
+      for (const event of events) {
         const competition = event?.competitions?.[0] || {};
         const scheduleState = String(event?.status?.type?.state || "").toLowerCase();
         if (league.liveOnly && scheduleState !== "in") continue;
@@ -343,14 +356,37 @@ async function fetchMajorLeagueSchedules(now) {
         if (endSeconds <= nowSeconds) continue;
         games.push(scheduledGame);
       }
-    } catch (error) {
-      console.warn(`Schedule unavailable for ${league.name}: ${String(error)}`);
+  }
+  return { games, scores, completed, scheduleDates, scheduleResults, scheduleCoverage };
+}
+
+function activeGameAt(game, nowMs) {
+  if (game?.scheduleState === "post") return false;
+  if (game?.is24x7) return true;
+  const startsAt = Date.parse(game?.startsAt || "");
+  const endsAt = Date.parse(game?.endsAt || "");
+  if (game?.status === "upcoming") return Number.isFinite(startsAt) && startsAt > nowMs && (!Number.isFinite(endsAt) || endsAt > nowMs);
+  return game?.status === "live" && Number.isFinite(endsAt) && endsAt > nowMs;
+}
+
+function missingPreviousStreamCornerSources(previousFeed, currentGames, now) {
+  const nowMs = now.getTime();
+  const previousKeys = new Set();
+  for (const game of Array.isArray(previousFeed?.games) ? previousFeed.games : []) {
+    if (!activeGameAt(game, nowMs)) continue;
+    for (const source of Array.isArray(game.sources) ? game.sources : []) {
+      if (source?.provider !== "StreamCorner") continue;
+      const key = feedSourceKey(source);
+      if (key) previousKeys.add(key);
     }
   }
-  return { games, scores, completed };
+  const currentKeys = new Set(currentGames.flatMap((game) => (game.sources || []).map(feedSourceKey)).filter(Boolean));
+  return [...previousKeys].filter((key) => !currentKeys.has(key));
 }
 
 async function inspectStreamCapabilities(source, provider = "") {
+  if (source.provider === "Pizarra MX" && isValidPizarraMxSourceRef(source.providerSourceRef) &&
+      !source.url && !source.embedUrl && !Object.keys(source.headers || {}).length) return source;
   if (!source.url) {
     if (!source.embedUrl) return null;
     // TimStreams already verifies the underlying live manifest before returning
@@ -420,15 +456,18 @@ const tempDirectory = await mkdtemp(join(tmpdir(), "streamcorner-scrape-"));
 
 try {
   let previousFeedPromise;
+  let previousFeedTrusted = false;
   async function loadPreviousFeed() {
     if (previousFeedPromise) return previousFeedPromise;
-    previousFeedPromise = (async () => {
-      try { return JSON.parse(await readFile(APP_FEED_OUTPUT, "utf8")); } catch { /* Try the deployed feed. */ }
-      try {
-        const response = await fetch(`${PREVIOUS_FEED_URL}?previous=${Date.now()}`, { signal: AbortSignal.timeout(15_000) });
-        return response.ok ? response.json() : {};
-      } catch { return {}; }
-    })();
+    previousFeedPromise = loadTrustedFeedBaseline({
+      localPath: APP_FEED_OUTPUT,
+      remoteUrl: PREVIOUS_FEED_URL,
+    }).then(({ feed, trusted, source }) => {
+      previousFeedTrusted = trusted;
+      if (trusted) console.log(`Loaded trusted previous feed baseline from ${source}`);
+      else console.warn("No trusted previous feed baseline is available");
+      return feed;
+    });
     return previousFeedPromise;
   }
 
@@ -513,6 +552,7 @@ try {
     const uniqueCandidates = [...new Set(candidates)];
     let lastError;
     for (const [index, url] of uniqueCandidates.entries()) {
+      console.log(`Checking StreamCorner decoder asset ${index + 1}/${uniqueCandidates.length}`);
       try {
         const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -525,10 +565,16 @@ try {
         lastError = error;
       }
     }
-    throw new Error(`No compatible StreamCorner decoder was found: ${String(lastError || "unknown error")}`);
+    return {
+      decoder: null,
+      decoderUrl: "",
+      error: `No compatible StreamCorner decoder was found: ${String(lastError || "unknown error")}`,
+    };
   }
 
-  const { decoder, decoderUrl } = await findDecoder();
+  const { decoder, decoderUrl, error: decoderError = "" } = await findDecoder();
+  const streamCornerErrors = decoderError ? [decoderError] : [];
+  if (decoderError) console.warn(`StreamCorner unavailable: ${decoderError}`);
 
   async function withTimeout(promise, timeoutMs, label) {
     let timer;
@@ -565,8 +611,10 @@ try {
 
   const jobs = [];
   const seenJobs = new Set();
-  const catalogCounts = {};
+  const catalogCounts = Object.fromEntries(providers.map((provider) => [provider, 0]));
   for (const provider of providers) {
+    if (!decoder) continue;
+    console.log(`Fetching StreamCorner ${provider} catalog`);
     const result = await request(provider);
     const rows = Array.isArray(result) ? result : (result?.channels || []);
     catalogCounts[provider] = rows.length;
@@ -663,14 +711,17 @@ try {
     };
   }).filter((game) => game.status && isSupportedSportsEntry(game));
 
+  console.log("Fetching TimStreams catalog");
   const timStreams = await fetchTimStreamsGames(now, estimatedDurationSeconds);
   catalogCounts.timstreams = timStreams.catalogCount;
   if (timStreams.error) console.warn(`TimStreams unavailable: ${timStreams.error}`);
   games.push(...timStreams.games.filter(isSupportedSportsEntry));
+  console.log("Fetching PPV catalog");
   const ppv = await fetchPpvGames(now);
   catalogCounts.ppv = ppv.catalogCount;
   if (ppv.error) console.warn(`PPV unavailable: ${ppv.error}`);
   games.push(...ppv.games.filter(isSupportedSportsEntry));
+  console.log("Fetching DLStreams catalog");
   const dlStreams = await fetchDlStreamsGames(now);
   catalogCounts.dlstreams = dlStreams.catalogCount;
   if (dlStreams.error) console.warn(`DLStreams unavailable: ${dlStreams.error}`);
@@ -681,7 +732,32 @@ try {
   if (retainedDlStreams.length) catalogCounts.dlstreams = retainedDlStreams.length;
   games.push(...(dlStreams.games.length ? dlStreams.games : retainedDlStreams).filter(isSupportedSportsEntry));
 
+  console.log("Fetching Pizarra MX catalog");
+  const pizarraMx = await fetchPizarraMxGames(now);
+  catalogCounts.pizarramx = pizarraMx.catalogCount;
+  let pizarramxRetainedGameCount = 0;
+  if (pizarraMx.error) console.warn(`Pizarra MX unavailable: ${pizarraMx.error}`);
+  games.push(...pizarraMx.games.filter(isSupportedSportsEntry));
+  if (pizarraMx.error) {
+    const previousFeed = await loadPreviousFeed();
+    const previousCards = Array.isArray(previousFeed.games)
+      ? previousFeed.games.filter((game) => game?.provider === "pizarramx") : [];
+    const retained = retainPreviousPizarraMxGames(previousFeed, now).filter(isSupportedSportsEntry);
+    if (previousCards.length) {
+      const previousUpdatedAt = Date.parse(previousFeed.updatedAt || "");
+      const fallbackAgeMs = now.getTime() - previousUpdatedAt;
+      if (!Number.isFinite(previousUpdatedAt) || fallbackAgeMs < 0 || fallbackAgeMs > 15 * 60 * 1000 || !retained.length) {
+        throw new Error(`Pizarra MX unavailable and its prior cards are too stale or invalid to carry forward (${retained.length}/${previousCards.length} retained)`);
+      }
+      pizarramxRetainedGameCount = retained.length;
+      games.push(...retained);
+      console.warn(`Pizarra MX retained ${retained.length} recent prior card(s) after fetch failure`);
+    }
+  }
+
+  console.log("Fetching ESPN schedules and scoreboards");
   const schedule = await fetchMajorLeagueSchedules(now);
+  console.log(`ESPN schedule coverage accepted: ${Math.round(schedule.scheduleCoverage.coverage * 100)}% (${schedule.scheduleCoverage.successfulSlots}/${schedule.scheduleCoverage.expectedSlots} league/date slots)`);
   const scheduledGames = [...schedule.games, ...schedule.completed];
   const matchedSourceGames = new Set();
   for (const scheduled of scheduledGames) {
@@ -727,6 +803,7 @@ try {
     }
   }
   games = deduplicateFeedGames(games.filter((game) => game.scheduleState !== "post"));
+  console.log("Fetching Sports Streams catalog");
   const highfly = await fetchHighflyGames(now);
   catalogCounts.highfly = highfly.catalogCount;
   if (highfly.errors.length) console.warn(`Sports Streams: ${highfly.errors.join("; ")}`);
@@ -746,9 +823,9 @@ try {
     if (game.is24x7 || !Array.isArray(game.espnBroadcasts) || !game.espnBroadcasts.length) continue;
     for (const channel of findBroadcastChannelGames(game.espnBroadcasts, channelGames)) {
       for (const source of channel.sources || []) {
-        const key = source.url ? `${source.url}:${source.clearKey}` : source.embedUrl;
-        const exists = (game.sources || []).some((candidate) =>
-          candidate.url ? `${candidate.url}:${candidate.clearKey}` === key : candidate.embedUrl === key);
+        const key = feedSourceKey(source);
+        if (!key) continue;
+        const exists = (game.sources || []).some((candidate) => feedSourceKey(candidate) === key);
         if (!exists) {
           game.sources.push({ ...source });
           espnBroadcastSourceCount += 1;
@@ -779,7 +856,7 @@ try {
     const rank = (source) => ({ StreamCorner: 0, "Sports Streams": 1, TimStreams: 2, PPV: 3, DLStreams: 4 })[source.provider] ?? 5;
     game.sources = game.sources.sort((a, b) => rank(a) - rank(b))
       .filter((source) => {
-        const key = source.url ? `${source.url}:${source.clearKey}` : source.embedUrl;
+        const key = feedSourceKey(source);
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
@@ -789,6 +866,29 @@ try {
   const provenanceErrors = sourceProvenanceErrors(games);
   if (provenanceErrors.length) {
     throw new Error(`source provenance validation failed (${provenanceErrors.length}): ${provenanceErrors.slice(0, 5).join("; ")}`);
+  }
+
+  const sourceCoverage = compareFeedSourceCoverage(await loadPreviousFeed(), games, now);
+  if (sourceCoverage.materialLoss) {
+    throw new Error(`refusing feed after material time-valid source loss (${sourceCoverage.currentSourceCount}/${sourceCoverage.previousSourceCount} non-Pizarra sources remain)`);
+  }
+
+  let streamCornerMissingPriorSourceCount = 0;
+  if (decoderError) {
+    const previousFeed = await loadPreviousFeed();
+    assertDecoderFallbackHasTrustedBaseline(decoderError, previousFeedTrusted);
+    const missingSources = missingPreviousStreamCornerSources(previousFeed, games, now);
+    streamCornerMissingPriorSourceCount = missingSources.length;
+    const previousActiveCount = new Set(
+      (Array.isArray(previousFeed.games) ? previousFeed.games : [])
+        .filter((game) => activeGameAt(game, now.getTime()))
+        .flatMap((game) => (game.sources || []).filter((source) => source?.provider === "StreamCorner").map(feedSourceKey))
+        .filter(Boolean),
+    ).size;
+    const materialLossThreshold = Math.max(5, Math.ceil(previousActiveCount * 0.2));
+    if (missingSources.length >= materialLossThreshold) {
+      throw new Error(`StreamCorner decoder unavailable; refusing feed with ${missingSources.length} of ${previousActiveCount} still-active prior StreamCorner sources missing`);
+    }
   }
 
   const directStreams = games.flatMap((game) => game.sources
@@ -814,6 +914,12 @@ try {
     scores: schedule.scores,
   };
   const scrape = {
+    sourceCoverage,
+    scheduleCoverage: schedule.scheduleCoverage,
+    streamCornerErrors,
+    streamCornerMissingPriorSourceCount,
+    pizarramxError: pizarraMx.error,
+    pizarramxRetainedGameCount,
     highflyCatalogCount: highfly.catalogCount,
     highflySourceCount: games.flatMap((game) => game.sources).filter((source) => source.provider === "Sports Streams").length,
     addonPpvDuplicatesRemoved,
@@ -849,6 +955,12 @@ try {
       directStreamCount: directStreams.length,
       m3u8Count: m3u8.length,
       decoderUrl,
+      sourceCoverage,
+      scheduleCoverage: schedule.scheduleCoverage,
+      streamCornerErrors,
+      streamCornerMissingPriorSourceCount,
+      pizarramxError: pizarraMx.error,
+      pizarramxRetainedGameCount,
       timStreamsResolvedStreamCount: timStreams.resolvedStreamCount,
       ppvPlayableCount: ppv.playableCount,
       dlStreamsPlayableCount: dlStreams.playableCount,
@@ -868,6 +980,12 @@ try {
   }
 
   console.log(JSON.stringify({
+    sourceCoverage,
+    scheduleCoverage: schedule.scheduleCoverage,
+    streamCornerErrors,
+    streamCornerMissingPriorSourceCount,
+    pizarramxError: pizarraMx.error,
+    pizarramxRetainedGameCount,
     catalogCounts,
     gameCount: games.length,
     directStreamCount: directStreams.length,
