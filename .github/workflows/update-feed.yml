@@ -9,6 +9,8 @@ on:
     paths:
       - "tools/**"
       - ".github/workflows/update-feed.yml"
+      - "README.md"
+      - "site/index.html"
   workflow_dispatch:
   schedule:
     - cron: "*/5 * * * *"
