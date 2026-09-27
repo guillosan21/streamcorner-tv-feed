@@ -38,7 +38,7 @@ jobs:
           node-version: 24
 
       - name: Test provider mapping and duplicate preference
-        run: node --test tools/highfly.test.mjs tools/dlstreams.test.mjs tools/pizarramx.test.mjs tools/feed-baseline.test.mjs tools/feed-safety.test.mjs tools/espn-schedules.test.mjs
+        run: node --test tools/highfly.test.mjs tools/dlstreams.test.mjs tools/pizarramx.test.mjs tools/streamed.test.mjs tools/feed-baseline.test.mjs tools/feed-safety.test.mjs tools/espn-schedules.test.mjs
 
       - name: Scrape current games and stream URLs
         env:

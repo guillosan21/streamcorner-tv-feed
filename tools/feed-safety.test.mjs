@@ -51,6 +51,20 @@ test("Pizarra refs cannot mask a non-Pizarra source regression", () => {
   assert.equal(result.materialLoss, true);
 });
 
+test("provider migration skips only legacy StreamCorner identities in the loss baseline", () => {
+  const previousGames = [
+    ...Array.from({ length: 100 }, (_, index) => liveGame(`legacy-${index}`, [source(`old-${index}`, "StreamCorner")])),
+    ...Array.from({ length: 100 }, (_, index) => liveGame(`other-${index}`, [source(`other-${index}`)])),
+  ];
+  const currentGames = Array.from({ length: 80 }, (_, index) => liveGame(`other-${index}`, [source(`other-${index}`)]));
+  const result = compareFeedSourceCoverage({ updatedAt: "2026-09-27T05:55:00Z", games: previousGames }, currentGames, now);
+
+  assert.equal(result.previousSourceCount, 100);
+  assert.equal(result.currentSourceCount, 80);
+  assert.equal(result.missingSourceCount, 20);
+  assert.equal(result.materialLoss, false);
+});
+
 test("expired prior events do not become a source-loss baseline", () => {
   const oldFeed = {
     updatedAt: "2026-09-26T06:00:00Z",

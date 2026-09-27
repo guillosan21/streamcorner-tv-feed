@@ -25,7 +25,9 @@ function timeValidNonPizarraSources(games, updatedAt, nowMs) {
   for (const game of Array.isArray(games) ? games : []) {
     if (!gameIsTimeValid(game, nowMs, recentFeed)) continue;
     for (const source of Array.isArray(game.sources) ? game.sources : []) {
-      if (source?.provider === "Pizarra MX") continue;
+      // The provider migration intentionally replaces legacy StreamCorner identities with
+      // Streamed embeds. Keep the loss gate strict for every provider that remains active.
+      if (source?.provider === "Pizarra MX" || source?.provider === "StreamCorner") continue;
       const key = feedSourceKey(source);
       if (key) keys.add(key);
     }
