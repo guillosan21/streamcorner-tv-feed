@@ -1,18 +1,26 @@
 import { isDeepStrictEqual } from "node:util";
 
-function isRetiredSource(source) {
-  if (source?.provider === "Streamed" || source?.embedProvider === "Streamed") return true;
-  try {
-    return new URL(String(source?.embedUrl || "")).hostname.toLowerCase() === "embed.st";
-  } catch {
-    return false;
-  }
+export function isRetiredSource(source) {
+  const labels = [source?.provider, source?.embedProvider, String(source?.name || "").split("•", 1)[0]];
+  if (labels.some((label) => String(label || "").trim().toLowerCase() === "streamed")) return true;
+  if (String(source?.providerSourceRef || "").toLowerCase().startsWith("streamed:")) return true;
+  return [source?.url, source?.embedUrl].some((value) => {
+    try {
+      const parsed = new URL(String(value || ""));
+      return parsed.hostname.toLowerCase() === "embed.st" &&
+        !parsed.pathname.toLowerCase().startsWith("/embed/ingest/") &&
+        /^\/embed\/[a-z0-9_-]{1,64}\/[a-z0-9_-]{1,128}\/[0-9]{1,2}\/?$/i.test(parsed.pathname);
+    } catch {
+      return false;
+    }
+  });
 }
 
 export function deriveRetiredSourceSnapshot(feed, status) {
   const sanitizedFeed = structuredClone(feed);
   const sanitizedStatus = structuredClone(status);
   let removedSourceCount = 0;
+  let removedGameCount = 0;
   const removedSourceProviderCounts = {};
 
   for (const game of Array.isArray(sanitizedFeed.games) ? sanitizedFeed.games : []) {
@@ -24,6 +32,18 @@ export function deriveRetiredSourceSnapshot(feed, status) {
       removedSourceProviderCounts[provider] = (removedSourceProviderCounts[provider] || 0) + 1;
       return false;
     });
+  }
+
+  // The previous snapshot already removed sources, so its retired-only cards are empty.
+  // Keep unrelated source-less schedule rows and mixed-provider games intact.
+  sanitizedFeed.games = sanitizedFeed.games.filter((game) => {
+    const retiredOnlyCard = String(game?.provider || "").toLowerCase() === "streamed" &&
+      Array.isArray(game.sources) && game.sources.length === 0;
+    if (retiredOnlyCard) removedGameCount += 1;
+    return !retiredOnlyCard;
+  });
+  if (removedGameCount && Object.hasOwn(sanitizedStatus, "gameCount")) {
+    sanitizedStatus.gameCount = sanitizedFeed.games.length;
   }
 
   if (sanitizedFeed.catalogCounts && Object.hasOwn(sanitizedFeed.catalogCounts, "streamed")) {
@@ -49,16 +69,21 @@ export function deriveRetiredSourceSnapshot(feed, status) {
     feed: sanitizedFeed,
     status: sanitizedStatus,
     removedSourceCount,
+    removedGameCount,
     removedSourceProviderCounts,
   };
 }
 
 export function assertRetiredSnapshotMatchesCurrent(currentFeed, currentStatus, candidateFeed, candidateStatus, {
   requireRetiredSources = true,
+  requireRetiredGames = false,
 } = {}) {
   const expected = deriveRetiredSourceSnapshot(currentFeed, currentStatus);
   if (requireRetiredSources && expected.removedSourceCount === 0) {
     throw new Error("the currently served feed has no retired sources to remove");
+  }
+  if (requireRetiredGames && expected.removedGameCount === 0) {
+    throw new Error("the currently served feed has no retired-only cards to remove");
   }
   if (candidateFeed?.updatedAt !== currentFeed?.updatedAt || candidateStatus?.updatedAt !== currentStatus?.updatedAt) {
     throw new Error("sanitized snapshot must preserve the currently served feed and status timestamps");
@@ -69,6 +94,7 @@ export function assertRetiredSnapshotMatchesCurrent(currentFeed, currentStatus, 
   return {
     updatedAt: currentFeed.updatedAt,
     removedSourceCount: expected.removedSourceCount,
+    removedGameCount: expected.removedGameCount,
     removedSourceProviderCounts: expected.removedSourceProviderCounts,
   };
 }

@@ -19,7 +19,11 @@ const [currentFeed, currentStatus, candidateFeedText, candidateStatusText] = awa
 ]);
 const candidateFeed = JSON.parse(candidateFeedText);
 const candidateStatus = JSON.parse(candidateStatusText);
-const result = assertRetiredSnapshotMatchesCurrent(currentFeed, currentStatus, candidateFeed, candidateStatus);
+const emptyCardCorrection = process.env.RETIREMENT_MODE === "empty-cards";
+const result = assertRetiredSnapshotMatchesCurrent(currentFeed, currentStatus, candidateFeed, candidateStatus, {
+  requireRetiredSources: !emptyCardCorrection,
+  requireRetiredGames: emptyCardCorrection,
+});
 
 const sourceCounts = {};
 for (const game of candidateFeed.games || []) {
@@ -31,6 +35,10 @@ if (sourceCounts.Streamed || candidateFeed.catalogCounts?.streamed !== undefined
     candidateStatus.streamedErrors !== undefined || candidateStatus.streamedCatalogCounts !== undefined ||
     candidateStatus.qualityFilteredSourcesByProvider?.Streamed !== undefined) {
   throw new Error("sanitized snapshot still contains retired provider output or status");
+}
+if (candidateFeed.games?.some((game) => String(game?.provider || "").toLowerCase() === "streamed" &&
+  Array.isArray(game.sources) && game.sources.length === 0)) {
+  throw new Error("sanitized snapshot still contains retired-only empty game cards");
 }
 
 console.log(JSON.stringify({

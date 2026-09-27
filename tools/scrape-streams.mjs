@@ -11,6 +11,7 @@ import { compareFeedSourceCoverage } from "./feed-safety.mjs";
 import { assertSufficientEspnScheduleCoverage, espnLiveScheduleDates, espnScheduleDates, fetchEspnSchedules } from "./espn-schedules.mjs";
 import { fetchPizarraMxGames, retainPreviousPizarraMxGames } from "./pizarramx.mjs";
 import { filterKnownStandardDefinitionSources, maxHeightFromManifest } from "./stream-quality.mjs";
+import { isRetiredSource } from "./retired-snapshot.mjs";
 
 const APP_FEED_OUTPUT = process.env.APP_FEED_OUTPUT || "app/src/main/assets/games.json";
 const SCRAPE_OUTPUT = process.env.SCRAPE_OUTPUT || "data/scraped-streams.json";
@@ -171,12 +172,11 @@ function sourceProvenanceErrors(rows) {
       const provider = String(source.provider || "");
       const embedProvider = String(source.embedProvider || "");
       const inferred = inferredWebProvider(source.embedUrl);
-      const embedHost = runCatchingUrlHost(source.embedUrl);
       const rawProviderRef = String(source.providerSourceRef || "");
       const isPizarraRef = provider === "Pizarra MX" && rawProviderRef === rawProviderRef.trim() &&
         isValidPizarraMxSourceRef(rawProviderRef);
-      if (embedHost === "embed.st") {
-        errors.push(`${game.id}: retired embed host ${embedHost} cannot be published`);
+      if (isRetiredSource(source)) {
+        errors.push(`${game.id}: retired Streamed source cannot be published`);
       }
       if (!["TimStreams", "PPV", "Sports Streams", "DLStreams", "Pizarra MX"].includes(provider)) {
         errors.push(`${game.id}: invalid provider ${provider || "<empty>"}`);

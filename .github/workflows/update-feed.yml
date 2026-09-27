@@ -46,8 +46,14 @@ jobs:
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.head_commit.message == 'Sanitize deployed feed for retired provider [snapshot-20260927-r4f8]' }}
         run: node tools/validate-retired-snapshot.mjs
 
+      - name: Validate one-off retired-card correction
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.head_commit.message == 'Remove retired-only cards [snapshot-20260927-c9e2]' }}
+        env:
+          RETIREMENT_MODE: empty-cards
+        run: node tools/validate-retired-snapshot.mjs
+
       - name: Scrape current games and stream URLs
-        if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' || github.event.head_commit.message != 'Sanitize deployed feed for retired provider [snapshot-20260927-r4f8]' }}
+        if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' || (github.event.head_commit.message != 'Sanitize deployed feed for retired provider [snapshot-20260927-r4f8]' && github.event.head_commit.message != 'Remove retired-only cards [snapshot-20260927-c9e2]') }}
         env:
           APP_FEED_OUTPUT: site/games.json
           SCRAPE_OUTPUT: private-data/scraped-streams.json
