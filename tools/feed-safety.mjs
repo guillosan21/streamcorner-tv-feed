@@ -20,16 +20,17 @@ function gameIsTimeValid(game, nowMs, recentFeed) {
   return Boolean(game.is24x7 && recentFeed);
 }
 
-function timeValidCoverageSources(games, updatedAt, nowMs) {
+function timeValidCoverageSources(games, updatedAt, nowMs, finalEventIds = new Set()) {
   const recentFeed = feedIsRecent(updatedAt, nowMs);
   const keys = new Set();
   const knownSdKeys = new Set();
   for (const game of Array.isArray(games) ? games : []) {
+    if (game?.scoreboardEventId && finalEventIds.has(game.scoreboardEventId)) continue;
     if (!gameIsTimeValid(game, nowMs, recentFeed)) continue;
     for (const source of Array.isArray(game.sources) ? game.sources : []) {
-      // Omit opaque Pizarra entries and retired provider identities from the live-source
-      // baseline. Their removal must not mask a loss from any provider still being published.
-      if (["Pizarra MX", "StreamCorner", "Streamed"].includes(source?.provider)) continue;
+      // Omit opaque Pizarra entries and retired Streamed identities. Restored
+      // StreamCorner direct media is active coverage and must be protected.
+      if (["Pizarra MX", "Streamed"].includes(source?.provider)) continue;
       const key = feedSourceKey(source);
       if (!key) continue;
       if (isKnownStandardDefinition(source)) knownSdKeys.add(key);
@@ -44,11 +45,13 @@ export function compareFeedSourceCoverage(previousFeed, currentGames, now = new 
   minimumPreviousSources = DEFAULT_MIN_PREVIOUS_SOURCES,
   maximumLossRatio = DEFAULT_MAX_LOSS_RATIO,
   intentionallyExcludedSdSourceKeys = [],
+  finalEventIds = [],
 } = {}) {
   const nowMs = new Date(now).getTime();
   if (!Number.isFinite(nowMs)) throw new Error("invalid feed coverage comparison time");
-  const previous = timeValidCoverageSources(previousFeed?.games, previousFeed?.updatedAt, nowMs);
-  const current = timeValidCoverageSources(currentGames, new Date(nowMs).toISOString(), nowMs);
+  const officialFinalIds = new Set(finalEventIds);
+  const previous = timeValidCoverageSources(previousFeed?.games, previousFeed?.updatedAt, nowMs, officialFinalIds);
+  const current = timeValidCoverageSources(currentGames, new Date(nowMs).toISOString(), nowMs, officialFinalIds);
   const intentionallyExcluded = new Set(intentionallyExcludedSdSourceKeys);
   const intentionallyExcludedPriorKeys = [...previous.allKeys].filter((key) => intentionallyExcluded.has(key));
   const previousKnownSdKeys = new Set([...previous.knownSdKeys, ...intentionallyExcludedPriorKeys]);

@@ -52,7 +52,7 @@ test("Pizarra refs cannot mask a non-Pizarra source regression", () => {
   assert.equal(result.materialLoss, true);
 });
 
-test("provider migration skips only legacy StreamCorner identities in the loss baseline", () => {
+test("restored StreamCorner sources are protected by the active-source loss baseline", () => {
   const previousGames = [
     ...Array.from({ length: 100 }, (_, index) => liveGame(`legacy-${index}`, [source(`old-${index}`, "StreamCorner")])),
     ...Array.from({ length: 100 }, (_, index) => liveGame(`other-${index}`, [source(`other-${index}`)])),
@@ -60,10 +60,33 @@ test("provider migration skips only legacy StreamCorner identities in the loss b
   const currentGames = Array.from({ length: 80 }, (_, index) => liveGame(`other-${index}`, [source(`other-${index}`)]));
   const result = compareFeedSourceCoverage({ updatedAt: "2026-09-27T05:55:00Z", games: previousGames }, currentGames, now);
 
-  assert.equal(result.previousSourceCount, 100);
+  assert.equal(result.previousSourceCount, 200);
   assert.equal(result.currentSourceCount, 80);
-  assert.equal(result.missingSourceCount, 20);
+  assert.equal(result.missingSourceCount, 120);
+  assert.equal(result.materialLoss, true);
+});
+
+test("official final scores end stale saved live-source coverage before synthetic endsAt", () => {
+  const finished = Array.from({ length: 35 }, (_, index) => ({
+    ...liveGame(`finished-${index}`, [source(`old-${index}`, "Sports Streams")]),
+    scoreboardEventId: `espn-mlb-${index}`,
+  }));
+  const stillLive = Array.from({ length: 30 }, (_, index) => ({
+    ...liveGame(`active-${index}`, [source(`active-${index}`, "PPV")]),
+    scoreboardEventId: `espn-nfl-${index}`,
+  }));
+  const previousFeed = { updatedAt: "2026-09-27T05:55:00Z", games: [...finished, ...stillLive] };
+  const finalEventIds = finished.map((game) => game.scoreboardEventId);
+  const current = stillLive.slice(0, 20);
+  const result = compareFeedSourceCoverage(previousFeed, current, now, { finalEventIds });
+  assert.equal(result.previousSourceCount, 30);
+  assert.equal(result.missingSourceCount, 10);
   assert.equal(result.materialLoss, false);
+
+  const unconfirmed = compareFeedSourceCoverage(previousFeed, current, now);
+  assert.equal(unconfirmed.previousSourceCount, 65);
+  assert.equal(unconfirmed.missingSourceCount, 45);
+  assert.equal(unconfirmed.materialLoss, true);
 });
 
 test("retiring Streamed removes its 149 sources from the baseline and keeps active-provider loss protection", () => {

@@ -10,6 +10,7 @@ import { loadTrustedFeedBaseline } from "./feed-baseline.mjs";
 import { compareFeedSourceCoverage } from "./feed-safety.mjs";
 import { assertSufficientEspnScheduleCoverage, espnLiveScheduleDates, espnScheduleDates, fetchEspnSchedules } from "./espn-schedules.mjs";
 import { fetchPizarraMxGames, retainPreviousPizarraMxGames } from "./pizarramx.mjs";
+import { fetchStreamCornerGames } from "./streamcorner.mjs";
 import { filterKnownStandardDefinitionSources, maxHeightFromManifest } from "./stream-quality.mjs";
 import { isRetiredSource } from "./retired-snapshot.mjs";
 
@@ -178,7 +179,7 @@ function sourceProvenanceErrors(rows) {
       if (isRetiredSource(source)) {
         errors.push(`${game.id}: retired Streamed source cannot be published`);
       }
-      if (!["TimStreams", "PPV", "Sports Streams", "DLStreams", "Pizarra MX"].includes(provider)) {
+      if (!["StreamCorner", "TimStreams", "PPV", "Sports Streams", "DLStreams", "Pizarra MX"].includes(provider)) {
         errors.push(`${game.id}: invalid provider ${provider || "<empty>"}`);
       }
       if (!String(source.name || "").startsWith(`${provider} • `)) {
@@ -483,6 +484,12 @@ try {
   const catalogCounts = {};
   let games = [];
 
+  console.log("Fetching StreamCorner catalog from current provider domain");
+  const streamCorner = await fetchStreamCornerGames(now, estimatedDurationSeconds);
+  catalogCounts.streamcorner = Object.values(streamCorner.catalogCounts).reduce((sum, count) => sum + count, 0);
+  if (streamCorner.error) console.warn(`StreamCorner unavailable: ${streamCorner.error}`);
+  games.push(...streamCorner.games.filter(isSupportedSportsEntry));
+
   console.log("Fetching TimStreams catalog");
   const timStreams = await fetchTimStreamsGames(now, estimatedDurationSeconds);
   catalogCounts.timstreams = timStreams.catalogCount;
@@ -629,7 +636,7 @@ try {
   const addonPpvDuplicatesRemoved = await preferAddonOverPpv(games);
   games.forEach((game) => {
     const seen = new Set();
-    const rank = (source) => ({ "Sports Streams": 0, TimStreams: 1, PPV: 2, DLStreams: 3 })[source.provider] ?? 4;
+    const rank = (source) => ({ StreamCorner: 0, "Sports Streams": 1, TimStreams: 2, PPV: 3, DLStreams: 4 })[source.provider] ?? 5;
     game.sources = game.sources.sort((a, b) => rank(a) - rank(b))
       .filter((source) => {
         const key = feedSourceKey(source);
@@ -638,7 +645,7 @@ try {
         return true;
       });
   });
-  games = games.filter((game) => game.provider !== "highfly" || game.sources.length);
+  games = games.filter((game) => !["highfly", "streamcorner"].includes(game.provider) || game.sources.length);
   const provenanceErrors = sourceProvenanceErrors(games);
   if (provenanceErrors.length) {
     throw new Error(`source provenance validation failed (${provenanceErrors.length}): ${provenanceErrors.slice(0, 5).join("; ")}`);
@@ -646,6 +653,7 @@ try {
 
   const sourceCoverage = compareFeedSourceCoverage(await loadPreviousFeed(), games, now, {
     intentionallyExcludedSdSourceKeys,
+    finalEventIds: schedule.scores.filter((score) => score.state === "post").map((score) => score.id),
   });
   if (sourceCoverage.materialLoss) {
     throw new Error(`refusing feed after material time-valid source loss (${sourceCoverage.currentSourceCount}/${sourceCoverage.previousSourceCount} active sources remain)`);
@@ -687,6 +695,8 @@ try {
     ambiguousAddonEvents: addonMatches.ambiguous,
     unmatchedAddonEvents: addonMatches.unmatched,
     highflyErrors: highfly.errors,
+    streamCornerError: streamCorner.error,
+    streamCornerDecoderUrl: streamCorner.decoderUrl,
     scrapedAt: now.toISOString(),
     timStreamsApiUrl: timStreams.apiUrl,
     timStreamsResolvedStreamCount: timStreams.resolvedStreamCount,
@@ -717,6 +727,9 @@ try {
       qualityFilteredSourceCount,
       qualityFilteredSourcesByProvider,
       scheduleCoverage: schedule.scheduleCoverage,
+      streamCornerError: streamCorner.error,
+      streamCornerSourceCount: games.flatMap((game) => game.sources).filter((source) => source.provider === "StreamCorner").length,
+      streamCornerDecoderUrl: streamCorner.decoderUrl,
       pizarramxError: pizarraMx.error,
       pizarramxRetainedGameCount,
       timStreamsResolvedStreamCount: timStreams.resolvedStreamCount,
@@ -742,6 +755,7 @@ try {
     qualityFilteredSourceCount,
     qualityFilteredSourcesByProvider,
     scheduleCoverage: schedule.scheduleCoverage,
+    streamCornerError: streamCorner.error,
     pizarramxError: pizarraMx.error,
     pizarramxRetainedGameCount,
     catalogCounts,
