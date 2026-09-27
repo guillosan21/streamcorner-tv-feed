@@ -1,4 +1,4 @@
-# StreamCorner TV feed
+# Sports Lounge TV feed
 
 Automatically refreshed Streamed, TimStreams, PPV.st, Sports Streams, and DLStreams game and stream feed for the Android TV app.
 
