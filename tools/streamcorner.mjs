@@ -1,4 +1,6 @@
 import vm from "node:vm";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 
 const SITE = "https://cornerstream.tech/";
 const PROVIDERS = ["admin", "nba", "nfl", "alpha", "beta", "001", "003"];
@@ -58,6 +60,26 @@ export async function discoverStreamCornerRuntime(fetcher = fetch) {
     throw new Error("current StreamCorner decoder shape is unsupported");
   }
   return { workers: workers.slice(0, 12), decoderCode, decoderExport, decoderUrl: decoderUrl.href };
+}
+
+export async function loadStreamCornerRuntime(fetcher) {
+  try {
+    return { ...(await discoverStreamCornerRuntime(fetcher)), fallbackWarning: "" };
+  } catch (liveError) {
+    // GitHub-hosted runners can receive a site-level Cloudflare 403 even while the
+    // provider's worker API remains available. The owner's last verified public
+    // decoder asset is a bounded fallback; the site can refresh it explicitly.
+    const cached = JSON.parse(await readFile(new URL("./assets/streamcorner-runtime.json", import.meta.url), "utf8"));
+    const digest = createHash("sha256").update(cached.decoderCode).digest("hex");
+    if (digest !== cached.decoderSha256 || cached.decoderCode.length > MAX_ASSET_BYTES ||
+        !Array.isArray(cached.workers) || !cached.workers.length ||
+        !cached.workers.every((host) => WORKER_HOST.test(host)) ||
+        !new URL(cached.decoderUrl).href.startsWith(`${SITE}assets/`) ||
+        !/^[A-Za-z_$][\w$]*$/.test(cached.decoderExport)) {
+      throw new Error(`live runtime failed and cached runtime is invalid: ${String(liveError)}`);
+    }
+    return { ...cached, fallbackWarning: `current site unavailable (${String(liveError)}); using checked-in decoder` };
+  }
 }
 
 function decoderFor(runtime, fetcher) {
@@ -151,8 +173,9 @@ export function streamCornerGameFromDetail(job, detail, now, estimatedDurationSe
 export async function fetchStreamCornerGames(now, estimatedDurationSeconds, fetcher = fetch) {
   const catalogCounts = Object.fromEntries(PROVIDERS.map((provider) => [provider, 0]));
   try {
-    const runtime = await discoverStreamCornerRuntime(fetcher);
+    const runtime = await loadStreamCornerRuntime(fetcher);
     const decoder = decoderFor(runtime, fetcher);
+    const catalogErrors = [];
     const catalogs = await Promise.all(PROVIDERS.map(async (provider) => {
       try {
         const result = await request(decoder, runtime.workers, provider);
@@ -160,7 +183,8 @@ export async function fetchStreamCornerGames(now, estimatedDurationSeconds, fetc
         catalogCounts[provider] = rows.length;
         return rows.map((row) => ({ provider, row, id: String(row.stream_id || row.game_id || row.channel_id || "").trim() }))
           .filter((job) => job.id);
-      } catch {
+      } catch (error) {
+        catalogErrors.push(`${provider}: ${String(error)}`);
         return [];
       }
     }));
@@ -185,8 +209,12 @@ export async function fetchStreamCornerGames(now, estimatedDurationSeconds, fetc
         } catch { /* One rotating event does not invalidate another event's verified source. */ }
       }
     }));
-    return { games, catalogCounts, decoderUrl: runtime.decoderUrl, error: games.length ? "" : "no direct HLS/DASH sources passed validation" };
+    return {
+      games, catalogCounts, decoderUrl: runtime.decoderUrl,
+      warning: runtime.fallbackWarning,
+      error: games.length ? "" : `no direct HLS/DASH sources passed validation (${catalogErrors.slice(0, 2).join("; ")})`,
+    };
   } catch (error) {
-    return { games: [], catalogCounts, decoderUrl: "", error: String(error) };
+    return { games: [], catalogCounts, decoderUrl: "", warning: "", error: String(error) };
   }
 }

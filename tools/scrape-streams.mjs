@@ -488,6 +488,7 @@ try {
   const streamCorner = await fetchStreamCornerGames(now, estimatedDurationSeconds);
   catalogCounts.streamcorner = Object.values(streamCorner.catalogCounts).reduce((sum, count) => sum + count, 0);
   if (streamCorner.error) console.warn(`StreamCorner unavailable: ${streamCorner.error}`);
+  if (streamCorner.warning) console.warn(`StreamCorner runtime: ${streamCorner.warning}`);
   games.push(...streamCorner.games.filter(isSupportedSportsEntry));
 
   console.log("Fetching TimStreams catalog");
@@ -696,6 +697,7 @@ try {
     unmatchedAddonEvents: addonMatches.unmatched,
     highflyErrors: highfly.errors,
     streamCornerError: streamCorner.error,
+    streamCornerWarning: streamCorner.warning,
     streamCornerDecoderUrl: streamCorner.decoderUrl,
     scrapedAt: now.toISOString(),
     timStreamsApiUrl: timStreams.apiUrl,
@@ -728,6 +730,7 @@ try {
       qualityFilteredSourcesByProvider,
       scheduleCoverage: schedule.scheduleCoverage,
       streamCornerError: streamCorner.error,
+      streamCornerWarning: streamCorner.warning,
       streamCornerSourceCount: games.flatMap((game) => game.sources).filter((source) => source.provider === "StreamCorner").length,
       streamCornerDecoderUrl: streamCorner.decoderUrl,
       pizarramxError: pizarraMx.error,

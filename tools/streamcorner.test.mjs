@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { discoverStreamCornerRuntime, streamCornerGameFromDetail } from "./streamcorner.mjs";
+import { discoverStreamCornerRuntime, loadStreamCornerRuntime, streamCornerGameFromDetail } from "./streamcorner.mjs";
+
+test("uses the integrity-checked local decoder when the site challenges a publisher runner", async () => {
+  const runtime = await loadStreamCornerRuntime(async () => new Response("challenge", { status: 403 }));
+  assert.match(runtime.fallbackWarning, /HTTP 403/);
+  assert.ok(runtime.decoderCode.length > 1000);
+  assert.ok(runtime.workers.length > 0);
+  assert.ok(runtime.decoderUrl.startsWith("https://cornerstream.tech/assets/"));
+});
 
 test("discovers the rotating decoder and workers from the current domain only", async () => {
   const pages = new Map([
