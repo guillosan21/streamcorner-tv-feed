@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { compareFeedSourceCoverage } from "./feed-safety.mjs";
+import { feedSourceKey } from "./playback-identity.mjs";
 
 const now = new Date("2026-09-27T06:00:00Z");
 
@@ -65,6 +66,31 @@ test("provider migration skips only legacy StreamCorner identities in the loss b
   assert.equal(result.materialLoss, false);
 });
 
+test("retiring Streamed removes its 149 sources from the baseline and keeps active-provider loss protection", () => {
+  const previousGames = [
+    ...Array.from({ length: 149 }, (_, index) => liveGame(`retired-${index}`, [{
+      provider: "Streamed",
+      embedUrl: `https://embed.st/embed/hotel/live-${index}/1`,
+    }])),
+    ...Array.from({ length: 100 }, (_, index) => liveGame(`active-${index}`, [source(`active-${index}`)])),
+  ];
+  const previousFeed = { updatedAt: "2026-09-27T05:55:00Z", games: previousGames };
+  const allActiveSourcesRemain = Array.from({ length: 100 }, (_, index) => liveGame(`active-${index}`, [source(`active-${index}`)]));
+  const afterRetirement = compareFeedSourceCoverage(previousFeed, allActiveSourcesRemain, now);
+
+  assert.equal(afterRetirement.previousSourceCount, 100);
+  assert.equal(afterRetirement.currentSourceCount, 100);
+  assert.equal(afterRetirement.missingSourceCount, 0);
+  assert.equal(afterRetirement.materialLoss, false);
+
+  const activeProviderRegression = Array.from({ length: 40 }, (_, index) => liveGame(`active-${index}`, [source(`active-${index}`)]));
+  const stillStrict = compareFeedSourceCoverage(previousFeed, activeProviderRegression, now);
+  assert.equal(stillStrict.previousSourceCount, 100);
+  assert.equal(stillStrict.currentSourceCount, 40);
+  assert.equal(stillStrict.missingSourceCount, 60);
+  assert.equal(stillStrict.materialLoss, true);
+});
+
 test("expired prior events do not become a source-loss baseline", () => {
   const oldFeed = {
     updatedAt: "2026-09-26T06:00:00Z",
@@ -97,13 +123,16 @@ test("known SD sources are reported and excluded from the source-loss baseline",
 test("current explicit SD evidence exempts only matching prior source identities", () => {
   const previousGames = [
     ...Array.from({ length: 60 }, (_, index) => liveGame(`normal-${index}`, [source(`normal-${index}`)])),
-    ...Array.from({ length: 40 }, (_, index) => liveGame(`old-streamed-${index}`, [{
-      provider: "Streamed",
-      embedUrl: `https://embed.st/embed/hotel/live-${index}/1`,
+    ...Array.from({ length: 40 }, (_, index) => liveGame(`old-sd-${index}`, [{
+      ...source(`old-sd-${index}`),
+      maxHeight: 480,
     }])),
   ];
   const currentGames = Array.from({ length: 20 }, (_, index) => liveGame(`normal-${index}`, [source(`normal-${index}`)]));
-  const intentionallyExcludedSdSourceKeys = new Set(Array.from({ length: 40 }, (_, index) => `web:https://embed.st/embed/hotel/live-${index}/1`));
+  const intentionallyExcludedSdSourceKeys = new Set(previousGames
+    .filter((game) => game.id.includes("old-sd-"))
+    .flatMap((game) => game.sources)
+    .map(feedSourceKey));
   const result = compareFeedSourceCoverage(
     { updatedAt: "2026-09-27T05:55:00Z", games: previousGames },
     currentGames,

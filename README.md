@@ -1,6 +1,6 @@
 # Sports Lounge TV feed
 
-Automatically refreshed Streamed, TimStreams, PPV.st, Sports Streams, and DLStreams game and stream feed for the Android TV app.
+Automatically refreshed TimStreams, PPV.st, Sports Streams, DLStreams, and Pizarra MX game and stream feed for the Android TV app.
 
 All event-based sports leagues from the configured feeds are retained in the feed. The Android app keeps profile favorite pickers separately restricted to its curated major-league catalog.
 
@@ -8,4 +8,4 @@ The scheduled GitHub Actions job requests a rebuild and deployment of `games.jso
 
 Schema version 2 marks generated events as deduplicated and final-event filtered. Compatible app versions can trust those guarantees and display the cached catalog immediately instead of repeating expensive reconciliation on low-power TV hardware.
 
-Streamed matches and live events are read from its documented JSON API, and embed URLs are accepted only from the validated `embed.st/embed/{source}/{id}` route. TimStreams catalog reads retry transient `events: null` rotation responses across both `timstreams.st` and `timst.cfd`. PPV mirrors rediscovered through another catalog are collapsed into PPV's single canonical event player, while independent Streamed and TimStreams feeds remain available.
+TimStreams catalog reads retry transient `events: null` rotation responses across both `timstreams.st` and `timst.cfd`. PPV mirrors rediscovered through another catalog are collapsed into PPV's single canonical event player.

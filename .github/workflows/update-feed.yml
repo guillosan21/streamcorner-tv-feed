@@ -40,9 +40,14 @@ jobs:
           node-version: 24
 
       - name: Test provider mapping and duplicate preference
-        run: node --test tools/highfly.test.mjs tools/dlstreams.test.mjs tools/pizarramx.test.mjs tools/streamed.test.mjs tools/stream-quality.test.mjs tools/feed-baseline.test.mjs tools/feed-safety.test.mjs tools/espn-schedules.test.mjs
+        run: node --test tools/*.test.mjs
+
+      - name: Validate one-off sanitized snapshot
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.head_commit.message == 'Sanitize deployed feed for retired provider [snapshot-20260927-r4f8]' }}
+        run: node tools/validate-retired-snapshot.mjs
 
       - name: Scrape current games and stream URLs
+        if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' || github.event.head_commit.message != 'Sanitize deployed feed for retired provider [snapshot-20260927-r4f8]' }}
         env:
           APP_FEED_OUTPUT: site/games.json
           SCRAPE_OUTPUT: private-data/scraped-streams.json

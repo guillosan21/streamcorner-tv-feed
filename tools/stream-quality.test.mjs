@@ -5,15 +5,7 @@ import {
   filterKnownStandardDefinitionSources,
   isKnownStandardDefinition,
   maxHeightFromManifest,
-  normalizeStreamedHd,
 } from "./stream-quality.mjs";
-
-test("Streamed HD metadata stays tri-state", () => {
-  assert.equal(normalizeStreamedHd(true), true);
-  assert.equal(normalizeStreamedHd(false), false);
-  assert.equal(normalizeStreamedHd(undefined), null);
-  assert.equal(normalizeStreamedHd("true"), null);
-});
 
 test("known SD metadata is filtered and unknown or HD quality is retained", () => {
   const heights = [480, 720, 1080, 2160, 0, undefined];
@@ -22,8 +14,8 @@ test("known SD metadata is filtered and unknown or HD quality is retained", () =
     url: `https://media.example/${index}.m3u8`,
     ...(maxHeight === undefined ? {} : { maxHeight }),
   }));
-  sources.push({ provider: "Streamed", hd: false, embedUrl: "https://embed.st/embed/hotel/sd/1" });
-  sources.push({ provider: "Streamed", hd: null, name: "Streamed • English 2", embedUrl: "https://embed.st/embed/hotel/unknown/2" });
+  sources.push({ provider: "DLStreams", hd: false, url: "https://media.example/quality-sd.m3u8" });
+  sources.push({ provider: "DLStreams", hd: null, name: "DLStreams • Unknown 2", url: "https://media.example/quality-unknown.m3u8" });
 
   assert.equal(isKnownStandardDefinition(sources[0]), true);
   assert.equal(isKnownStandardDefinition(sources[1]), false);
@@ -34,7 +26,7 @@ test("known SD metadata is filtered and unknown or HD quality is retained", () =
   const games = [{ id: "event", sources }];
   const result = filterKnownStandardDefinitionSources(games);
   assert.equal(result.excludedSourceCount, 2);
-  assert.deepEqual(result.excludedSourcesByProvider, { DLStreams: 1, Streamed: 1 });
+  assert.deepEqual(result.excludedSourcesByProvider, { DLStreams: 2 });
   assert.equal(result.excludedSourceKeys.length, 2);
   assert.deepEqual(games[0].sources.map((source) => source.maxHeight), [720, 1080, 2160, 0, undefined, undefined]);
 });

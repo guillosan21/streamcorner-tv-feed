@@ -10,7 +10,6 @@ import { loadTrustedFeedBaseline } from "./feed-baseline.mjs";
 import { compareFeedSourceCoverage } from "./feed-safety.mjs";
 import { assertSufficientEspnScheduleCoverage, espnLiveScheduleDates, espnScheduleDates, fetchEspnSchedules } from "./espn-schedules.mjs";
 import { fetchPizarraMxGames, retainPreviousPizarraMxGames } from "./pizarramx.mjs";
-import { fetchStreamedGames, isValidStreamedEmbedUrl } from "./streamed.mjs";
 import { filterKnownStandardDefinitionSources, maxHeightFromManifest } from "./stream-quality.mjs";
 
 const APP_FEED_OUTPUT = process.env.APP_FEED_OUTPUT || "app/src/main/assets/games.json";
@@ -155,7 +154,6 @@ function countRemainingDuplicatePairs(rows) {
 function inferredWebProvider(embedUrl) {
   const host = runCatchingUrlHost(embedUrl);
   if (!host) return "";
-  if (host === "embed.st" && isValidStreamedEmbedUrl(embedUrl)) return "Streamed";
   if (host === "timstreams.st" || host.endsWith(".timstreams.st") || /^cdx-\d+\.website$/.test(host)) return "TimStreams";
   if (host === "ppv.st" || host.endsWith(".ppv.st") ||
       host === "embedindia.st" || host.endsWith(".embedindia.st") ||
@@ -173,10 +171,14 @@ function sourceProvenanceErrors(rows) {
       const provider = String(source.provider || "");
       const embedProvider = String(source.embedProvider || "");
       const inferred = inferredWebProvider(source.embedUrl);
+      const embedHost = runCatchingUrlHost(source.embedUrl);
       const rawProviderRef = String(source.providerSourceRef || "");
       const isPizarraRef = provider === "Pizarra MX" && rawProviderRef === rawProviderRef.trim() &&
         isValidPizarraMxSourceRef(rawProviderRef);
-      if (!["Streamed", "TimStreams", "PPV", "Sports Streams", "DLStreams", "Pizarra MX"].includes(provider)) {
+      if (embedHost === "embed.st") {
+        errors.push(`${game.id}: retired embed host ${embedHost} cannot be published`);
+      }
+      if (!["TimStreams", "PPV", "Sports Streams", "DLStreams", "Pizarra MX"].includes(provider)) {
         errors.push(`${game.id}: invalid provider ${provider || "<empty>"}`);
       }
       if (!String(source.name || "").startsWith(`${provider} • `)) {
@@ -343,9 +345,6 @@ async function inspectStreamCapabilities(source, provider = "") {
       !source.url && !source.embedUrl && !Object.keys(source.headers || {}).length) return source;
   if (!source.url) {
     if (!source.embedUrl) return null;
-    if (provider === "streamed" || source.provider === "Streamed") {
-      return isValidStreamedEmbedUrl(source.embedUrl) ? source : null;
-    }
     // TimStreams already verifies the underlying live manifest before returning
     // its stable watch page. Other embedded providers are checked for an online
     // HTTPS response so dead event pages do not appear as selectable broadcasts.
@@ -483,21 +482,6 @@ try {
   const now = new Date();
   const catalogCounts = {};
   let games = [];
-
-  console.log("Fetching Streamed catalog");
-  const streamed = await fetchStreamedGames(now);
-  catalogCounts.streamed = streamed.catalogCount;
-  if (streamed.errors.length) {
-    console.warn(`Streamed API reported ${streamed.errors.length} issue(s): ${streamed.errors.slice(0, 3).join("; ")}`);
-  }
-  if (!streamed.allMatchesAvailable || !streamed.liveMatchesAvailable ||
-      (streamed.catalogCount > 0 && streamed.playableGameCount === 0)) {
-    throw new Error(
-      `refusing feed after incomplete Streamed catalog (all=${streamed.allMatchesAvailable}, live=${streamed.liveMatchesAvailable}, ` +
-        `${streamed.playableGameCount} playable games from ${streamed.catalogCount} matches)`,
-    );
-  }
-  games.push(...streamed.games.filter(isSupportedSportsEntry));
 
   console.log("Fetching TimStreams catalog");
   const timStreams = await fetchTimStreamsGames(now, estimatedDurationSeconds);
@@ -638,20 +622,14 @@ try {
   }));
   games.forEach((game) => { game.sources = game.sources.filter(Boolean); });
   const qualityFilter = filterKnownStandardDefinitionSources(games);
-  const qualityFilteredSourceCount = streamed.excludedHdSourceCount + qualityFilter.excludedSourceCount;
-  const intentionallyExcludedSdSourceKeys = new Set([
-    ...streamed.excludedHdSourceKeys,
-    ...qualityFilter.excludedSourceKeys,
-  ]);
-  const qualityFilteredSourcesByProvider = {
-    ...qualityFilter.excludedSourcesByProvider,
-    ...(streamed.excludedHdSourceCount ? { Streamed: (qualityFilter.excludedSourcesByProvider.Streamed || 0) + streamed.excludedHdSourceCount } : {}),
-  };
+  const qualityFilteredSourceCount = qualityFilter.excludedSourceCount;
+  const intentionallyExcludedSdSourceKeys = qualityFilter.excludedSourceKeys;
+  const qualityFilteredSourcesByProvider = qualityFilter.excludedSourcesByProvider;
   // Only a successfully verified add-on source may replace a working PPV entry.
   const addonPpvDuplicatesRemoved = await preferAddonOverPpv(games);
   games.forEach((game) => {
     const seen = new Set();
-    const rank = (source) => ({ Streamed: 0, "Sports Streams": 1, TimStreams: 2, PPV: 3, DLStreams: 4 })[source.provider] ?? 5;
+    const rank = (source) => ({ "Sports Streams": 0, TimStreams: 1, PPV: 2, DLStreams: 3 })[source.provider] ?? 4;
     game.sources = game.sources.sort((a, b) => rank(a) - rank(b))
       .filter((source) => {
         const key = feedSourceKey(source);
@@ -670,18 +648,8 @@ try {
     intentionallyExcludedSdSourceKeys,
   });
   if (sourceCoverage.materialLoss) {
-    throw new Error(`refusing feed after material time-valid source loss (${sourceCoverage.currentSourceCount}/${sourceCoverage.previousSourceCount} non-Pizarra sources remain)`);
+    throw new Error(`refusing feed after material time-valid source loss (${sourceCoverage.currentSourceCount}/${sourceCoverage.previousSourceCount} active sources remain)`);
   }
-
-  const streamedCatalogCounts = {
-    matches: streamed.catalogCount,
-    liveMatches: streamed.liveCatalogCount,
-    playableGames: streamed.playableGameCount,
-    playableSources: streamed.playableSourceCount,
-    qualityFilteredSources: streamed.excludedHdSourceCount,
-    streamRequests: streamed.streamRequestCount,
-  };
-  const streamedErrors = streamed.errors;
 
   const directStreams = games.flatMap((game) => game.sources
     .filter((source) => source.url)
@@ -710,8 +678,6 @@ try {
     qualityFilteredSourceCount,
     qualityFilteredSourcesByProvider,
     scheduleCoverage: schedule.scheduleCoverage,
-    streamedErrors,
-    streamedCatalogCounts,
     pizarramxError: pizarraMx.error,
     pizarramxRetainedGameCount,
     highflyCatalogCount: highfly.catalogCount,
@@ -751,8 +717,6 @@ try {
       qualityFilteredSourceCount,
       qualityFilteredSourcesByProvider,
       scheduleCoverage: schedule.scheduleCoverage,
-      streamedErrors,
-      streamedCatalogCounts,
       pizarramxError: pizarraMx.error,
       pizarramxRetainedGameCount,
       timStreamsResolvedStreamCount: timStreams.resolvedStreamCount,
@@ -778,8 +742,6 @@ try {
     qualityFilteredSourceCount,
     qualityFilteredSourcesByProvider,
     scheduleCoverage: schedule.scheduleCoverage,
-    streamedErrors,
-    streamedCatalogCounts,
     pizarramxError: pizarraMx.error,
     pizarramxRetainedGameCount,
     catalogCounts,

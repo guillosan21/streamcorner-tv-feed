@@ -20,16 +20,16 @@ function gameIsTimeValid(game, nowMs, recentFeed) {
   return Boolean(game.is24x7 && recentFeed);
 }
 
-function timeValidNonPizarraSources(games, updatedAt, nowMs) {
+function timeValidCoverageSources(games, updatedAt, nowMs) {
   const recentFeed = feedIsRecent(updatedAt, nowMs);
   const keys = new Set();
   const knownSdKeys = new Set();
   for (const game of Array.isArray(games) ? games : []) {
     if (!gameIsTimeValid(game, nowMs, recentFeed)) continue;
     for (const source of Array.isArray(game.sources) ? game.sources : []) {
-      // The provider migration intentionally replaces legacy StreamCorner identities with
-      // Streamed embeds. Keep the loss gate strict for every provider that remains active.
-      if (source?.provider === "Pizarra MX" || source?.provider === "StreamCorner") continue;
+      // Omit opaque Pizarra entries and retired provider identities from the live-source
+      // baseline. Their removal must not mask a loss from any provider still being published.
+      if (["Pizarra MX", "StreamCorner", "Streamed"].includes(source?.provider)) continue;
       const key = feedSourceKey(source);
       if (!key) continue;
       if (isKnownStandardDefinition(source)) knownSdKeys.add(key);
@@ -47,8 +47,8 @@ export function compareFeedSourceCoverage(previousFeed, currentGames, now = new 
 } = {}) {
   const nowMs = new Date(now).getTime();
   if (!Number.isFinite(nowMs)) throw new Error("invalid feed coverage comparison time");
-  const previous = timeValidNonPizarraSources(previousFeed?.games, previousFeed?.updatedAt, nowMs);
-  const current = timeValidNonPizarraSources(currentGames, new Date(nowMs).toISOString(), nowMs);
+  const previous = timeValidCoverageSources(previousFeed?.games, previousFeed?.updatedAt, nowMs);
+  const current = timeValidCoverageSources(currentGames, new Date(nowMs).toISOString(), nowMs);
   const intentionallyExcluded = new Set(intentionallyExcludedSdSourceKeys);
   const intentionallyExcludedPriorKeys = [...previous.allKeys].filter((key) => intentionallyExcluded.has(key));
   const previousKnownSdKeys = new Set([...previous.knownSdKeys, ...intentionallyExcludedPriorKeys]);

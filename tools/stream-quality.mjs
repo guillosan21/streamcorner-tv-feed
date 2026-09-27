@@ -1,9 +1,5 @@
 import { feedSourceKey } from "./playback-identity.mjs";
 
-export function normalizeStreamedHd(value) {
-  return typeof value === "boolean" ? value : null;
-}
-
 export function isKnownStandardDefinition(source) {
   const height = source?.maxHeight;
   return source?.hd === false || (typeof height === "number" && Number.isFinite(height) && height >= 1 && height < 720);
