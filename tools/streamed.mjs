@@ -1,3 +1,6 @@
+import { feedSourceKey } from "./playback-identity.mjs";
+import { normalizeStreamedHd } from "./stream-quality.mjs";
+
 const API_ORIGIN = "https://streamed.pk";
 const API_ROOT = `${API_ORIGIN}/api`;
 const MAX_MATCHES = 500;
@@ -117,7 +120,7 @@ function sourceLabel(stream, index) {
   return `Streamed • ${[language, `${hd.trim()}${number}`].filter(Boolean).join(" ")}`;
 }
 
-function mapGame(match, liveIds, streamsBySource, nowMs) {
+function mapGame(match, liveIds, streamsBySource, nowMs, qualityStats) {
   if (!validMatch(match)) return null;
   const startMs = Number(match.date);
   const startsAt = new Date(startMs);
@@ -139,12 +142,25 @@ function mapGame(match, liveIds, streamsBySource, nowMs) {
       if (!isRecord(stream) || !isValidStreamedEmbedUrl(stream.embedUrl, ref.source, ref.id)) continue;
       const routeStreamNo = EMBED_PATH_REGEX.exec(new URL(stream.embedUrl).pathname)?.[3];
       if (routeStreamNo && Number.isSafeInteger(stream.streamNo) && Number(routeStreamNo) !== stream.streamNo) continue;
-      if (seenEmbeds.has(stream.embedUrl)) continue;
+      const hd = normalizeStreamedHd(stream.hd);
+      if (seenEmbeds.has(stream.embedUrl)) {
+        if (hd === false) {
+          const duplicateSourceIndex = sources.findIndex((source) => source.embedUrl === stream.embedUrl);
+          if (duplicateSourceIndex >= 0) sources.splice(duplicateSourceIndex, 1);
+          qualityStats.excludedHdSourceKeys.add(feedSourceKey({ embedUrl: stream.embedUrl }));
+        }
+        continue;
+      }
       seenEmbeds.add(stream.embedUrl);
+      if (hd === false) {
+        qualityStats.excludedHdSourceKeys.add(feedSourceKey({ embedUrl: stream.embedUrl }));
+        continue;
+      }
       sources.push({
         provider: "Streamed",
         embedProvider: "Streamed",
-        name: sourceLabel(stream, index),
+        name: sourceLabel({ ...stream, hd }, index),
+        hd,
         url: "",
         embedUrl: stream.embedUrl,
       });
@@ -247,7 +263,8 @@ export async function fetchStreamedGames(now = new Date(), {
   }));
 
   const nowMs = new Date(now).getTime();
-  const games = matches.map((match) => mapGame(match, liveIds, streamsBySource, nowMs)).filter(Boolean);
+  const qualityStats = { excludedHdSourceKeys: new Set() };
+  const games = matches.map((match) => mapGame(match, liveIds, streamsBySource, nowMs, qualityStats)).filter(Boolean);
   const playableSourceCount = games.reduce((count, game) => count + game.sources.length, 0);
   return {
     games,
@@ -257,6 +274,8 @@ export async function fetchStreamedGames(now = new Date(), {
     liveCatalogCount: liveMatches.length,
     playableGameCount: games.length,
     playableSourceCount,
+    excludedHdSourceCount: qualityStats.excludedHdSourceKeys.size,
+    excludedHdSourceKeys: [...qualityStats.excludedHdSourceKeys],
     streamRequestCount: refs.length,
     errors,
     error: endpointResults.every((result) => result.status === "rejected")

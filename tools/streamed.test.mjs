@@ -29,14 +29,19 @@ test("Streamed JSON adapter merges all and live matches and maps validated embed
     ]);
     if (parsed.pathname === "/api/stream/hotel/match_1") return jsonResponse([
       { streamNo: 1, language: "English", hd: true, source: "hotel", embedUrl: "https://embed.st/embed/hotel/match_1/1" },
-      { streamNo: 2, language: "Spanish", hd: false, source: "hotel", embedUrl: "https://evil.example/embed/hotel/match_1" },
-      { streamNo: 3, language: "English", hd: true, source: "hotel", embedUrl: "https://embed.st/embed/ingest/match_1" },
+      { streamNo: 2, language: "Spanish", hd: false, source: "hotel", embedUrl: "https://embed.st/embed/hotel/match_1/2" },
+      { streamNo: 3, language: "English", source: "hotel", embedUrl: "https://embed.st/embed/hotel/match_1/3" },
+      { streamNo: 4, language: "English", hd: "true", source: "hotel", embedUrl: "https://embed.st/embed/hotel/match_1/4" },
       { streamNo: 4, language: "English", hd: true, source: "hotel", embedUrl: "https://embed.st/embed/alpha/match_1/4" },
       { streamNo: 5, language: "English", hd: true, source: "hotel", embedUrl: "https://embed.st/embed/hotel/other_match/5" },
       { streamNo: 6, language: "English", hd: true, source: "hotel", embedUrl: "https://embed.st/embed/hotel/match_1/7" },
+      { streamNo: 1, language: "Conflict", hd: false, source: "hotel", embedUrl: "https://embed.st/embed/hotel/match_1/1" },
+      { streamNo: 5, language: "English", hd: true, source: "hotel", embedUrl: "https://embed.st/embed/hotel/match_1/5" },
     ]);
     if (parsed.pathname === "/api/stream/alpha/live_id") return jsonResponse([
       { streamNo: 1, language: "English", hd: false, source: "alpha", embedUrl: "https://embed.st/embed/alpha/live_id/1" },
+      { streamNo: 2, language: "English", hd: true, source: "alpha", embedUrl: "https://embed.st/embed/alpha/live_id/2" },
+      { streamNo: 3, language: "English", source: "alpha", embedUrl: "https://embed.st/embed/alpha/live_id/3" },
     ]);
     throw new Error(`unexpected URL ${url}`);
   };
@@ -46,12 +51,20 @@ test("Streamed JSON adapter merges all and live matches and maps validated embed
   assert.equal(result.catalogCount, 2);
   assert.equal(result.liveCatalogCount, 1);
   assert.equal(result.playableGameCount, 2);
-  assert.equal(result.playableSourceCount, 2);
+  assert.equal(result.playableSourceCount, 5);
+  assert.equal(result.excludedHdSourceCount, 3);
   assert.equal(result.streamRequestCount, 2);
   assert.deepEqual(result.games.map((game) => game.status).sort(), ["live", "upcoming"]);
   assert.equal(result.games.find((game) => game.id === "streamed-match_1").sport, "Soccer");
-  assert.equal(result.games.find((game) => game.id === "streamed-match_1").sources[0].provider, "Streamed");
-  assert.equal(result.games.find((game) => game.id === "streamed-match_1").sources[0].embedUrl, "https://embed.st/embed/hotel/match_1/1");
+  const upcomingSources = result.games.find((game) => game.id === "streamed-match_1").sources;
+  const hdSource = upcomingSources.find((source) => source.hd === true);
+  const unknownSource = upcomingSources.find((source) => source.hd === null);
+  assert.equal(hdSource.provider, "Streamed");
+  assert.equal(hdSource.embedUrl, "https://embed.st/embed/hotel/match_1/5");
+  assert.match(hdSource.name, /\bHD\b/);
+  assert.doesNotMatch(unknownSource.name, /\bHD\b/);
+  assert.equal(upcomingSources.some((source) => /Spanish|Conflict/.test(source.name)), false);
+  assert.ok(result.games.flatMap((game) => game.sources).every((source) => source.hd === true || source.hd === null));
   assert.ok(requests.every(({ parsed, options }) => parsed.origin === "https://streamed.pk" && options.redirect === "error" && options.signal));
 });
 

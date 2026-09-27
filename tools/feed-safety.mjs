@@ -1,4 +1,5 @@
 import { feedSourceKey } from "./playback-identity.mjs";
+import { isKnownStandardDefinition } from "./stream-quality.mjs";
 
 const DEFAULT_MIN_PREVIOUS_SOURCES = 20;
 const DEFAULT_MAX_LOSS_RATIO = 0.5;
@@ -22,6 +23,7 @@ function gameIsTimeValid(game, nowMs, recentFeed) {
 function timeValidNonPizarraSources(games, updatedAt, nowMs) {
   const recentFeed = feedIsRecent(updatedAt, nowMs);
   const keys = new Set();
+  const knownSdKeys = new Set();
   for (const game of Array.isArray(games) ? games : []) {
     if (!gameIsTimeValid(game, nowMs, recentFeed)) continue;
     for (const source of Array.isArray(game.sources) ? game.sources : []) {
@@ -29,28 +31,38 @@ function timeValidNonPizarraSources(games, updatedAt, nowMs) {
       // Streamed embeds. Keep the loss gate strict for every provider that remains active.
       if (source?.provider === "Pizarra MX" || source?.provider === "StreamCorner") continue;
       const key = feedSourceKey(source);
-      if (key) keys.add(key);
+      if (!key) continue;
+      if (isKnownStandardDefinition(source)) knownSdKeys.add(key);
+      else keys.add(key);
     }
   }
-  return keys;
+  return { keys, knownSdKeys, allKeys: new Set([...keys, ...knownSdKeys]) };
 }
 
 /** Rejects a refresh that loses most sources still valid by event time. */
 export function compareFeedSourceCoverage(previousFeed, currentGames, now = new Date(), {
   minimumPreviousSources = DEFAULT_MIN_PREVIOUS_SOURCES,
   maximumLossRatio = DEFAULT_MAX_LOSS_RATIO,
+  intentionallyExcludedSdSourceKeys = [],
 } = {}) {
   const nowMs = new Date(now).getTime();
   if (!Number.isFinite(nowMs)) throw new Error("invalid feed coverage comparison time");
   const previous = timeValidNonPizarraSources(previousFeed?.games, previousFeed?.updatedAt, nowMs);
   const current = timeValidNonPizarraSources(currentGames, new Date(nowMs).toISOString(), nowMs);
-  const missingCount = [...previous].filter((key) => !current.has(key)).length;
-  const lossRatio = previous.size ? missingCount / previous.size : 0;
+  const intentionallyExcluded = new Set(intentionallyExcludedSdSourceKeys);
+  const intentionallyExcludedPriorKeys = [...previous.allKeys].filter((key) => intentionallyExcluded.has(key));
+  const previousKnownSdKeys = new Set([...previous.knownSdKeys, ...intentionallyExcludedPriorKeys]);
+  const coverageBaseline = new Set([...previous.keys].filter((key) => !intentionallyExcluded.has(key)));
+  const missingCount = [...coverageBaseline].filter((key) => !current.keys.has(key)).length;
+  const lossRatio = coverageBaseline.size ? missingCount / coverageBaseline.size : 0;
   return {
-    previousSourceCount: previous.size,
-    currentSourceCount: current.size,
+    previousSourceCount: coverageBaseline.size,
+    currentSourceCount: current.keys.size,
     missingSourceCount: missingCount,
     lossRatio,
-    materialLoss: previous.size >= minimumPreviousSources && lossRatio > maximumLossRatio,
+    previousKnownSdSourceCount: previousKnownSdKeys.size,
+    currentKnownSdSourceCount: current.knownSdKeys.size,
+    intentionallyExcludedPriorSourceCount: intentionallyExcludedPriorKeys.length,
+    materialLoss: coverageBaseline.size >= minimumPreviousSources && lossRatio > maximumLossRatio,
   };
 }

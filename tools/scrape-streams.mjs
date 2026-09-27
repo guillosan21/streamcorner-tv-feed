@@ -11,6 +11,7 @@ import { compareFeedSourceCoverage } from "./feed-safety.mjs";
 import { assertSufficientEspnScheduleCoverage, espnLiveScheduleDates, espnScheduleDates, fetchEspnSchedules } from "./espn-schedules.mjs";
 import { fetchPizarraMxGames, retainPreviousPizarraMxGames } from "./pizarramx.mjs";
 import { fetchStreamedGames, isValidStreamedEmbedUrl } from "./streamed.mjs";
+import { filterKnownStandardDefinitionSources, maxHeightFromManifest } from "./stream-quality.mjs";
 
 const APP_FEED_OUTPUT = process.env.APP_FEED_OUTPUT || "app/src/main/assets/games.json";
 const SCRAPE_OUTPUT = process.env.SCRAPE_OUTPUT || "data/scraped-streams.json";
@@ -376,9 +377,7 @@ async function inspectStreamCapabilities(source, provider = "") {
     if (!response.ok) return null;
     const manifest = await response.text();
     if (!/^\s*(?:#EXTM3U|<\?xml[\s\S]*?<MPD|<MPD)/i.test(manifest)) return null;
-    const heights = [...manifest.matchAll(/(?:height\s*=\s*["'](\d+)["']|RESOLUTION\s*=\s*\d+x(\d+))/gi)]
-      .map((match) => Number(match[1] || match[2] || 0));
-    const maxHeight = Math.max(0, ...heights);
+    const maxHeight = maxHeightFromManifest(manifest);
     const videoRange = /dvhe|dvh1|dolby[ -]?vision/i.test(manifest) ? "DOLBY VISION"
       : /\bhlg\b|arib-std-b67|transferCharacteristics\s*=\s*["']18["']|VIDEO-RANGE\s*=\s*HLG/i.test(manifest) ? "HLG HDR"
       : /smpte2084|st2084|transferCharacteristics\s*=\s*["']16["']|VIDEO-RANGE\s*=\s*PQ/i.test(manifest) ? "HDR10/PQ" : "";
@@ -638,6 +637,16 @@ try {
     }
   }));
   games.forEach((game) => { game.sources = game.sources.filter(Boolean); });
+  const qualityFilter = filterKnownStandardDefinitionSources(games);
+  const qualityFilteredSourceCount = streamed.excludedHdSourceCount + qualityFilter.excludedSourceCount;
+  const intentionallyExcludedSdSourceKeys = new Set([
+    ...streamed.excludedHdSourceKeys,
+    ...qualityFilter.excludedSourceKeys,
+  ]);
+  const qualityFilteredSourcesByProvider = {
+    ...qualityFilter.excludedSourcesByProvider,
+    ...(streamed.excludedHdSourceCount ? { Streamed: (qualityFilter.excludedSourcesByProvider.Streamed || 0) + streamed.excludedHdSourceCount } : {}),
+  };
   // Only a successfully verified add-on source may replace a working PPV entry.
   const addonPpvDuplicatesRemoved = await preferAddonOverPpv(games);
   games.forEach((game) => {
@@ -657,7 +666,9 @@ try {
     throw new Error(`source provenance validation failed (${provenanceErrors.length}): ${provenanceErrors.slice(0, 5).join("; ")}`);
   }
 
-  const sourceCoverage = compareFeedSourceCoverage(await loadPreviousFeed(), games, now);
+  const sourceCoverage = compareFeedSourceCoverage(await loadPreviousFeed(), games, now, {
+    intentionallyExcludedSdSourceKeys,
+  });
   if (sourceCoverage.materialLoss) {
     throw new Error(`refusing feed after material time-valid source loss (${sourceCoverage.currentSourceCount}/${sourceCoverage.previousSourceCount} non-Pizarra sources remain)`);
   }
@@ -667,6 +678,7 @@ try {
     liveMatches: streamed.liveCatalogCount,
     playableGames: streamed.playableGameCount,
     playableSources: streamed.playableSourceCount,
+    qualityFilteredSources: streamed.excludedHdSourceCount,
     streamRequests: streamed.streamRequestCount,
   };
   const streamedErrors = streamed.errors;
@@ -695,6 +707,8 @@ try {
   };
   const scrape = {
     sourceCoverage,
+    qualityFilteredSourceCount,
+    qualityFilteredSourcesByProvider,
     scheduleCoverage: schedule.scheduleCoverage,
     streamedErrors,
     streamedCatalogCounts,
@@ -734,6 +748,8 @@ try {
       directStreamCount: directStreams.length,
       m3u8Count: m3u8.length,
       sourceCoverage,
+      qualityFilteredSourceCount,
+      qualityFilteredSourcesByProvider,
       scheduleCoverage: schedule.scheduleCoverage,
       streamedErrors,
       streamedCatalogCounts,
@@ -759,6 +775,8 @@ try {
 
   console.log(JSON.stringify({
     sourceCoverage,
+    qualityFilteredSourceCount,
+    qualityFilteredSourcesByProvider,
     scheduleCoverage: schedule.scheduleCoverage,
     streamedErrors,
     streamedCatalogCounts,

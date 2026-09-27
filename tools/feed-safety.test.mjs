@@ -78,3 +78,44 @@ test("expired prior events do not become a source-loss baseline", () => {
   assert.equal(result.previousSourceCount, 0);
   assert.equal(result.materialLoss, false);
 });
+
+test("known SD sources are reported and excluded from the source-loss baseline", () => {
+  const previousGames = [
+    ...Array.from({ length: 60 }, (_, index) => liveGame(`hd-${index}`, [source(`hd-${index}`)])),
+    ...Array.from({ length: 40 }, (_, index) => liveGame(`sd-${index}`, [{ ...source(`sd-${index}`), maxHeight: 480 }])),
+  ];
+  const currentGames = Array.from({ length: 60 }, (_, index) => liveGame(`hd-${index}`, [source(`hd-${index}`)]));
+  const result = compareFeedSourceCoverage({ updatedAt: "2026-09-27T05:55:00Z", games: previousGames }, currentGames, now);
+
+  assert.equal(result.previousSourceCount, 60);
+  assert.equal(result.currentSourceCount, 60);
+  assert.equal(result.previousKnownSdSourceCount, 40);
+  assert.equal(result.missingSourceCount, 0);
+  assert.equal(result.materialLoss, false);
+});
+
+test("current explicit SD evidence exempts only matching prior source identities", () => {
+  const previousGames = [
+    ...Array.from({ length: 60 }, (_, index) => liveGame(`normal-${index}`, [source(`normal-${index}`)])),
+    ...Array.from({ length: 40 }, (_, index) => liveGame(`old-streamed-${index}`, [{
+      provider: "Streamed",
+      embedUrl: `https://embed.st/embed/hotel/live-${index}/1`,
+    }])),
+  ];
+  const currentGames = Array.from({ length: 20 }, (_, index) => liveGame(`normal-${index}`, [source(`normal-${index}`)]));
+  const intentionallyExcludedSdSourceKeys = new Set(Array.from({ length: 40 }, (_, index) => `web:https://embed.st/embed/hotel/live-${index}/1`));
+  const result = compareFeedSourceCoverage(
+    { updatedAt: "2026-09-27T05:55:00Z", games: previousGames },
+    currentGames,
+    now,
+    { intentionallyExcludedSdSourceKeys },
+  );
+
+  assert.equal(result.previousSourceCount, 60);
+  assert.equal(result.currentSourceCount, 20);
+  assert.equal(result.previousKnownSdSourceCount, 40);
+  assert.equal(result.intentionallyExcludedPriorSourceCount, 40);
+  assert.equal(result.missingSourceCount, 40);
+  assert.equal(result.lossRatio, 2 / 3);
+  assert.equal(result.materialLoss, true);
+});
