@@ -13,7 +13,8 @@ on:
       - "site/index.html"
   workflow_dispatch:
   schedule:
-    - cron: "*/5 * * * *"
+    # Avoid :00, where GitHub reports the highest schedule-trigger load.
+    - cron: "2-59/5 * * * *"
 
 permissions:
   contents: read

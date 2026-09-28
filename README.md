@@ -1,5 +1,7 @@
 # Sports Lounge TV feed
 
+GitHub's scheduled events are best-effort and may be delayed or dropped. A guaranteed five-minute publication cadence requires an independent scheduler to call this workflow's existing `workflow_dispatch` trigger; the cron alone is not a freshness guarantee.
+
 Automatically refreshed TimStreams, PPV.st, Sports Streams, DLStreams, and Pizarra MX game and stream feed for the Android TV app.
 
 All event-based sports leagues from the configured feeds are retained in the feed. The Android app keeps profile favorite pickers separately restricted to its curated major-league catalog.
