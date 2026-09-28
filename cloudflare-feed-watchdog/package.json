@@ -1,0 +1,8 @@
+{
+  "name": "streamcorner-feed-watchdog",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

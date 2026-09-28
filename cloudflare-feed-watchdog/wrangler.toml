@@ -1,0 +1,16 @@
+name = "streamcorner-feed-watchdog"
+main = "src/index.mjs"
+compatibility_date = "2026-09-28"
+workers_dev = false
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[vars]
+FEED_STATUS_URL = "https://guillosan21.github.io/streamcorner-tv-feed/status.json"
+GITHUB_OWNER = "guillosan21"
+GITHUB_REPO = "streamcorner-tv-feed"
+GITHUB_WORKFLOW_FILE = "update-feed.yml"
+GITHUB_BRANCH = "main"
+STALE_AFTER_MINUTES = "10"
+DISPATCH_COOLDOWN_MINUTES = "5"
