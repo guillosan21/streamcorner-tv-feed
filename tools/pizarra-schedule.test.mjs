@@ -6,6 +6,7 @@ import {
   deduplicateFeedSources,
   sameFeedEvent,
 } from "./scrape-streams.mjs";
+import { parsePizarraMxCatalog } from "./pizarramx.mjs";
 
 function pizarraSource(availableBeforeKickoff = true) {
   return {
@@ -152,6 +153,64 @@ test("ESPN pre remains authoritative when event dedup sees a provider live hint"
     assert.equal(merged[0].scheduleState, "pre");
     assert.equal(merged[0].status, "upcoming");
   }
+});
+
+test("untimed manual Pizarra stays Upcoming and separate from a timed ESPN matchup", () => {
+  const untimed = pizarraGame({
+    id: "pizarramx-manual-untimed",
+    sourceId: "manual-untimed",
+    startsAt: "",
+    status: "upcoming",
+    scheduleState: "pre",
+    sources: [{
+      ...pizarraSource(true),
+      providerSourceRef: `pizarramx:v1~m~${"c".repeat(64)}~${"d".repeat(64)}`,
+    }],
+  });
+  const official = espnGame("timed-event", "2026-09-26T18:00:00.000Z");
+
+  const result = attachScheduleGames([untimed], [official], new Date("2026-09-26T12:00:00.000Z"));
+  const manual = result.find((game) => game.provider === "pizarramx");
+  const scheduled = result.find((game) => game.scoreboardEventId === official.scoreboardEventId);
+
+  assert.equal(result.length, 2);
+  assert.equal(manual.startsAt, "");
+  assert.equal(manual.status, "upcoming");
+  assert.equal(manual.scheduleState, "pre");
+  assert.equal(manual.sources[0].availableBeforeKickoff, true);
+  assert.equal(manual.doNotAttachToOfficialSchedule, true);
+  assert.equal(scheduled.startsAt, official.startsAt);
+  assert.equal(scheduled.status, "upcoming");
+  assert.equal(scheduled.scheduleState, "pre");
+  assert.equal(sameFeedEvent(manual, scheduled), false);
+});
+
+test("authoritative ESPN live state overrides a future provider timing correction", () => {
+  const now = new Date("2026-09-26T12:00:00Z");
+  const pizarra = parsePizarraMxCatalog({
+    partidos: [{
+      id: "pizarra-future-live", competition: "Liga MX", home: "Atlas", away: "Monterrey",
+      status: "live", kickoff: "2026-09-26T18:00:00Z",
+    }],
+    detalles: { "pizarra-future-live": { directo: [{
+      fuente: "Canal 5",
+      embed: '<iframe src="https://exmxbxe.cfd/future-live" title="source"></iframe>',
+    }] } },
+  }, [], now)[0];
+  const officialLive = espnGame("live-despite-future-start", "2026-09-26T18:00:00Z", {
+    status: "live",
+    scheduleState: "in",
+  });
+
+  assert.equal(pizarra.status, "upcoming");
+  assert.equal(pizarra.scheduleState, "pre");
+  assert.equal(pizarra.sources[0].availableBeforeKickoff, true);
+
+  const result = attachScheduleGames([pizarra], [officialLive], now);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].scoreboardEventId, officialLive.scoreboardEventId);
+  assert.equal(result[0].status, "live");
+  assert.equal(result[0].scheduleState, "in");
 });
 
 test("source and event dedup preserve early-availability and ambiguity markers", () => {

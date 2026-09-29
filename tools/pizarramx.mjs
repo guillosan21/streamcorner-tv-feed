@@ -235,7 +235,7 @@ function pizarraSport(competition) {
   return "Soccer";
 }
 
-function eventGame(row, detail) {
+function eventGame(row, detail, nowMs) {
   if (!row || typeof row !== "object" || Array.isArray(row)) return null;
   const eventId = String(row.id ?? "");
   if (!/^[A-Za-z0-9][A-Za-z0-9._~-]{0,119}$/.test(eventId)) return null;
@@ -250,9 +250,12 @@ function eventGame(row, detail) {
   // Pizarra's date-only values cannot be safely combined with its display time.
   if (state === "ns" && !startsAt) return null;
   const kind = "e";
-  const live = state === "live";
+  const kickoffMs = Date.parse(startsAt || "");
+  const futureProviderLive = state === "live" && Number.isFinite(nowMs) &&
+    Number.isFinite(kickoffMs) && kickoffMs > nowMs;
+  const live = state === "live" && !futureProviderLive;
   const sources = sourceOptions(detail?.directo, kind, eventId)
-    .map((source) => live ? { ...source, availableBeforeKickoff: true } : source);
+    .map((source) => state === "live" ? { ...source, availableBeforeKickoff: true } : source);
   if (!sources.length) return null;
   return {
     id: `pizarramx-${eventId}`,
@@ -286,7 +289,8 @@ function manualGame(row) {
   const declaredKickoff = String(row.kickoff ?? "").trim();
   const eventKey = [league, homeTeam, awayTeam, declaredKickoff].map(normalizedIdentityText).join("\0");
   const eventDigest = sha256(`manual\0${eventKey}`);
-  const sources = sourceOptions(row.opciones, "m", eventKey);
+  const sources = sourceOptions(row.opciones, "m", eventKey)
+    .map((source) => ({ ...source, availableBeforeKickoff: true }));
   if (!sources.length) return null;
   return {
     id: `pizarramx-manual-${eventDigest}`,
@@ -298,8 +302,8 @@ function manualGame(row) {
     // Manual transmissions have no stable provider event ID or reliable kickoff.
     startsAt: "",
     endsAt: "",
-    status: "live",
-    scheduleState: "in",
+    status: "upcoming",
+    scheduleState: "pre",
     is24x7: false,
     homeTeam,
     awayTeam,
@@ -313,11 +317,12 @@ function manualGame(row) {
 }
 
 /** Maps the two static Pizarra data objects into URL-free opaque-source feed cards. */
-export function parsePizarraMxCatalog(data, manual = []) {
+export function parsePizarraMxCatalog(data, manual = [], now = new Date()) {
   if (!data || typeof data !== "object" || Array.isArray(data) || !Array.isArray(data.partidos)) {
     throw new Error("Pizarra DATOS_REALES must contain a partidos array");
   }
   const details = data.detalles && typeof data.detalles === "object" && !Array.isArray(data.detalles) ? data.detalles : {};
+  const nowMs = now instanceof Date ? now.getTime() : Date.parse(now);
   const games = [];
   const gamesById = new Map();
   const addGame = (game) => {
@@ -336,7 +341,7 @@ export function parsePizarraMxCatalog(data, manual = []) {
     }
   };
   for (const row of data.partidos) {
-    addGame(eventGame(row, details[String(row?.id ?? "")]));
+    addGame(eventGame(row, details[String(row?.id ?? "")], nowMs));
   }
   for (const row of Array.isArray(manual) ? manual : []) {
     addGame(manualGame(row));
@@ -352,13 +357,27 @@ export function retainPreviousPizarraMxGames(feed, now = new Date()) {
     if (!game || game.provider !== "pizarramx" || game.scheduleState === "post") return [];
     if (game.status !== "live" && game.status !== "upcoming") return [];
     const startsAt = Date.parse(game.startsAt || "");
-    if (game.status === "upcoming" && (!Number.isFinite(startsAt) || startsAt <= nowMs)) return [];
+    const untimedManual = !String(game.startsAt || "").trim() &&
+      (game.sources || []).some((source) => source?.provider === "Pizarra MX" &&
+        /^pizarramx:v1~m~[0-9a-f]{64}~[0-9a-f]{64}$/.test(String(source.providerSourceRef || "")));
+    const futureProviderLive = game.status === "live" && Number.isFinite(startsAt) && startsAt > nowMs &&
+      !String(game.scoreboardEventId || "").trim();
+    const untimedManualAvailable = untimedManual &&
+      (game.sources || []).some((source) => source?.provider === "Pizarra MX" &&
+        source.availableBeforeKickoff === true && /^pizarramx:v1~m~[0-9a-f]{64}~[0-9a-f]{64}$/.test(String(source.providerSourceRef || "")));
+    if (game.status === "upcoming" && !untimedManualAvailable && (!Number.isFinite(startsAt) || startsAt <= nowMs)) return [];
     if (game.status === "live" && Number.isFinite(startsAt) && nowMs - startsAt > 12 * 60 * 60 * 1000) return [];
     const sources = (Array.isArray(game.sources) ? game.sources : []).filter((source) =>
       source?.provider === "Pizarra MX" && PIZARRAMX_SOURCE_REF_PATTERN.test(String(source.providerSourceRef || "")) &&
       String(source.providerSourceRef) === String(source.providerSourceRef).trim() &&
       !source.url && !source.embedUrl && !Object.keys(source.headers || {}).length);
-    return sources.length ? [{ ...game, sources }] : [];
+    if (!sources.length) return [];
+    const normalizeToUpcoming = (untimedManual || futureProviderLive) && sources.length > 0;
+    return [{
+      ...game,
+      ...(normalizeToUpcoming ? { status: "upcoming", scheduleState: "pre" } : {}),
+      sources: normalizeToUpcoming ? sources.map((source) => ({ ...source, availableBeforeKickoff: true })) : sources,
+    }];
   });
 }
 
@@ -437,7 +456,6 @@ export async function fetchPizarraMxGames(now = new Date(), {
   fetcher = globalThis.fetch,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 } = {}) {
-  void now;
   if (typeof fetcher !== "function") return { games: [], catalogCount: 0, error: "fetch unavailable" };
   const timeout = requestTimeout(timeoutMs);
   try {
@@ -451,7 +469,7 @@ export async function fetchPizarraMxGames(now = new Date(), {
     ]);
     const data = parsePizarraMxAssignment(dataText, "DATOS_REALES");
     const manual = parsePizarraMxAssignment(manualText, "TRANSMISIONES_MANUALES");
-    const games = parsePizarraMxCatalog(data, manual);
+    const games = parsePizarraMxCatalog(data, manual, now);
     return { games, catalogCount: games.length, error: "" };
   } catch (error) {
     const message = String(error?.message || "");

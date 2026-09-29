@@ -80,7 +80,7 @@ test("Pizarra assignments accept only bounded JSON on one exact window variable"
   assert.throws(() => parsePizarraMxAssignment(`window.DATOS_REALES = {"padding":"${"x".repeat(512_001)}"};`, "DATOS_REALES"), /size limit/);
 });
 
-test("Pizarra event and manual mapping emits URL-free refs with live and schedule state", () => {
+test("Pizarra event and manual mapping emits URL-free refs with schedule and availability state", () => {
   const { data, manual } = sampleData();
   const games = parsePizarraMxCatalog(data, manual);
   assert.equal(games.length, 3);
@@ -101,11 +101,12 @@ test("Pizarra event and manual mapping emits URL-free refs with live and schedul
   assert.equal(upcoming.sources.some((source) => source.availableBeforeKickoff === true), false);
 
   const manualGame = games.find((game) => game.id.startsWith("pizarramx-manual-"));
-  assert.equal(manualGame.status, "live");
-  assert.equal(manualGame.scheduleState, "in");
+  assert.equal(manualGame.status, "upcoming");
+  assert.equal(manualGame.scheduleState, "pre");
   assert.equal(manualGame.startsAt, "");
   assert.equal(manualGame.is24x7, false);
   assert.equal(manualGame.sources.length, 1);
+  assert.equal(manualGame.sources.every((source) => source.availableBeforeKickoff === true), true);
 
   const serialized = JSON.stringify(games);
   for (const privateValue of ["la18hd.su", "exmxbxe.cfd", "streamx305.sbs", "youtube.com", "global1", "canal5", "friendly-42"]) {
@@ -115,6 +116,44 @@ test("Pizarra event and manual mapping emits URL-free refs with live and schedul
     assert.ok(game.sources.every((source) => source.url === "" && source.embedUrl === "" &&
       Object.keys(source.headers).length === 0 && isValidPizarraMxSourceRef(source.providerSourceRef)));
   }
+});
+
+test("future Pizarra provider-live events stay Upcoming while current and past events stay Live", () => {
+  const data = {
+    partidos: [{
+      id: "future-live", competition: "Liga MX", home: "Atlas", away: "Monterrey",
+      status: "live", kickoff: "2026-09-26T18:00:00Z",
+    }],
+    detalles: { "future-live": { directo: [eventSource("https://exmxbxe.cfd/future-live")] } },
+  };
+  const future = parsePizarraMxCatalog(data, [], new Date("2026-09-26T17:59:59Z"))[0];
+  const current = parsePizarraMxCatalog(data, [], new Date("2026-09-26T18:00:00Z"))[0];
+  const past = parsePizarraMxCatalog(data, [], new Date("2026-09-26T19:00:00Z"))[0];
+
+  assert.equal(future.status, "upcoming");
+  assert.equal(future.scheduleState, "pre");
+  assert.equal(future.sources[0].availableBeforeKickoff, true);
+  for (const game of [current, past]) {
+    assert.equal(game.status, "live");
+    assert.equal(game.scheduleState, "in");
+    assert.equal(game.sources[0].availableBeforeKickoff, true);
+  }
+});
+
+test("active untimed manual Pizarra rows stay Upcoming with a source available now", () => {
+  const games = parsePizarraMxCatalog({ partidos: [], detalles: {} }, [{
+    activo: true,
+    competicion: "Friendly",
+    local: "Home Team",
+    visitante: "Away Team",
+    opciones: [eventSource("https://exmxbxe.cfd/friendly-untimed", "Available now")],
+  }]);
+
+  assert.equal(games.length, 1);
+  assert.equal(games[0].status, "upcoming");
+  assert.equal(games[0].scheduleState, "pre");
+  assert.equal(games[0].startsAt, "");
+  assert.equal(games[0].sources[0].availableBeforeKickoff, true);
 });
 
 test("Pizarra catalog requires partidos while accepting a valid empty catalog", () => {
@@ -271,6 +310,44 @@ test("Pizarra fallback carries forward only recent-looking valid opaque refs", (
   assert.deepEqual(retained.map((game) => game.id), games.map((game) => game.id));
   assert.ok(retained.every((game) => game.sources.every((source) =>
     source.provider === "Pizarra MX" && isValidPizarraMxSourceRef(source.providerSourceRef) && !source.url && !source.embedUrl)));
+  const futureProviderLive = retained.find((game) => game.id === "pizarramx-match-42");
+  assert.equal(futureProviderLive.status, "upcoming");
+  assert.equal(futureProviderLive.scheduleState, "pre");
+  assert.equal(futureProviderLive.sources[0].availableBeforeKickoff, true);
+});
+
+test("legacy untimed manual Live cards are demoted and stay Upcoming across repeated fallback", () => {
+  const now = new Date("2026-09-26T20:00:00Z");
+  const manual = parsePizarraMxCatalog(sampleData().data, sampleData().manual)
+    .find((game) => game.id.startsWith("pizarramx-manual-"));
+  const legacy = {
+    ...manual,
+    status: "live",
+    scheduleState: "in",
+    sources: manual.sources.map((source) => {
+      const previousSource = { ...source };
+      delete previousSource.availableBeforeKickoff;
+      return previousSource;
+    }),
+  };
+  const firstFallback = retainPreviousPizarraMxGames({
+    updatedAt: "2026-09-26T19:55:00Z",
+    games: [legacy],
+  }, now);
+
+  assert.equal(firstFallback.length, 1);
+  assert.equal(firstFallback[0].status, "upcoming");
+  assert.equal(firstFallback[0].scheduleState, "pre");
+  assert.equal(firstFallback[0].sources[0].availableBeforeKickoff, true);
+
+  const secondFallback = retainPreviousPizarraMxGames({
+    updatedAt: "2026-09-26T20:00:00Z",
+    games: firstFallback,
+  }, new Date("2026-09-26T20:05:00Z"));
+  assert.equal(secondFallback.length, 1);
+  assert.equal(secondFallback[0].status, "upcoming");
+  assert.equal(secondFallback[0].scheduleState, "pre");
+  assert.equal(secondFallback[0].sources[0].availableBeforeKickoff, true);
 });
 
 test("duplicate Pizarra event and manual rows merge only distinct option refs", () => {
