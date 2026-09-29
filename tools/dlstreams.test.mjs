@@ -60,6 +60,28 @@ test("extracts only the validated provider player route", () => {
   assert.equal(__testing.parsePlayerTemplate(html, "45"), "");
 });
 
+test("accepts the verified daddylive player host and exact premiumtv path", () => {
+  assert.equal(
+    __testing.parsePlayerTemplate('<iframe src="https://daddyliveplayer.st/premiumtv/daddy.php?id=44"></iframe>', "44"),
+    "https://daddyliveplayer.st/premiumtv/daddy.php?id=__CHANNEL_ID__",
+  );
+});
+
+test("rejects unverified player hosts, paths, and query parameters", () => {
+  for (const url of [
+    "https://daddyliveplayer.st.evil.example/premiumtv/daddy.php?id=44",
+    "https://evil-daddyliveplayer.st/premiumtv/daddy.php?id=44",
+    "https://daddyliveplayer.st/premiumtv/other.php?id=44",
+    "https://daddyliveplayer.st/premiumtv/daddy.php?id=44&redirect=https://evil.example",
+    "https://daddyliveplayer.st/premiumtv/daddy.php?id=44&id=45",
+    "http://daddyliveplayer.st/premiumtv/daddy.php?id=44",
+    "https://daddyliveplayer.st:8443/premiumtv/daddy.php?id=44",
+    "https://hamis.romponalis.st/premiumtv/other.php?id=44",
+  ]) {
+    assert.equal(__testing.parsePlayerTemplate(`<iframe src="${url}"></iframe>`, "44"), "", url);
+  }
+});
+
 test("uses each channel's stable wrapper instead of sharing another channel's nested player", () => {
   assert.equal(__testing.channelPlayerUrl("66"), "https://dlstreams.st/stream/stream-66.php");
   assert.deepEqual(__testing.channelPlayerHeaders("66"), { Referer: "https://dlstreams.st/watch.php?id=66" });
@@ -77,6 +99,7 @@ test("matches ESPN broadcast names to exact US 24/7 channels without regional or
   const channels = [
     { title: "ESPN USA", is24x7: true },
     { title: "ESPN 1 MX", is24x7: true },
+    { title: "ESPN 2 MX", is24x7: true },
     { title: "NFL Network", is24x7: true },
     { title: "Spectrum Sportsnet LA", is24x7: true },
     { title: "Chicago Sports Network", is24x7: true },
@@ -85,5 +108,5 @@ test("matches ESPN broadcast names to exact US 24/7 channels without regional or
     __testing.findBroadcastChannelGames(["ESPN", "NFL Net", "SportsNet LA", "CHSN"], channels).map((game) => game.title),
     ["ESPN USA", "NFL Network", "Spectrum Sportsnet LA", "Chicago Sports Network"],
   );
-  assert.deepEqual(__testing.findBroadcastChannelGames(["ESPN+", "FOX32", "CBS4"], channels), []);
+  assert.deepEqual(__testing.findBroadcastChannelGames(["ESPN2", "ESPN+", "FOX32", "CBS4"], channels), []);
 });

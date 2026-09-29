@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   attachScheduleGames,
+  attachTimeLimitedDlStreamsSources,
   deduplicateFeedGames,
   deduplicateFeedSources,
   sameFeedEvent,
@@ -74,6 +75,96 @@ test("live Pizarra marker enables a unique multi-hour ESPN kickoff match", () =>
   const undeclaredEarly = pizarraGame({ startsAt: "2026-09-26T17:10:00.000Z", sources: [pizarraSource(false)] });
   const notAttached = attachScheduleGames([undeclaredEarly], [official], new Date("2026-09-26T16:00:00.000Z"));
   assert.equal(notAttached.find((game) => game.provider === "pizarramx").scoreboardEventId || "", "");
+});
+
+function attestedDlStreamsChannel(overrides = {}) {
+  return {
+    id: "dlstreams-926",
+    provider: "dlstreams",
+    sourceId: "926",
+    title: "ESPN 2 MX",
+    league: "Mexico Sports",
+    sport: "Sports",
+    startsAt: "2026-09-29T20:59:00.000Z",
+    endsAt: "2026-09-30T22:00:00.000Z",
+    status: "live",
+    is24x7: true,
+    sources: [{
+      provider: "DLStreams",
+      embedProvider: "DLStreams",
+      name: "DLStreams • ESPN 2 MX",
+      url: "",
+      clearKey: "",
+      embedUrl: "https://dlstreams.st/stream/stream-926.php",
+      headers: { Referer: "https://dlstreams.st/watch.php?id=926" },
+    }],
+    ...overrides,
+  };
+}
+
+function astrosPpvCard(overrides = {}) {
+  return {
+    id: "ppv-29614",
+    provider: "ppv",
+    sourceId: "29614",
+    title: "Chicago White Sox at Houston Astros",
+    league: "MLB",
+    sport: "Baseball",
+    startsAt: "2026-09-29T21:00:00.000Z",
+    endsAt: "2026-09-30T03:00:00.000Z",
+    status: "live",
+    scheduleState: "in",
+    scoreboardLeagueId: "MLB",
+    scoreboardEventId: "espn-mlb-401907896",
+    espnBroadcasts: ["ESPN2"],
+    sources: [{ provider: "PPV", name: "PPV • Chicago White Sox at Houston Astros", embedUrl: "https://ppv.st/event/29614" }],
+    ...overrides,
+  };
+}
+
+test("temporary DLStreams attestation attaches only channel 926 to the existing reconciled Astros card", () => {
+  const card = astrosPpvCard();
+  const channel = attestedDlStreamsChannel();
+  const games = [card, channel];
+
+  assert.equal(attachTimeLimitedDlStreamsSources(games, new Date("2026-09-29T22:00:00.000Z")), 1);
+  assert.equal(games.length, 2);
+  assert.equal(card.id, "ppv-29614");
+  assert.equal(card.sources.filter((source) => source.provider === "DLStreams").length, 1);
+  assert.deepEqual(card.sources.find((source) => source.provider === "DLStreams"), channel.sources[0]);
+  assert.equal(channel.sources.length, 1);
+
+  const repeat = attachTimeLimitedDlStreamsSources(games, new Date("2026-09-29T22:00:00.000Z"));
+  assert.equal(repeat, 0);
+
+  const canonicalEspnGame = astrosPpvCard({
+    id: "espn-mlb-401907896",
+    provider: "espn-schedule",
+    scoreboardEventId: "",
+  });
+  assert.equal(attachTimeLimitedDlStreamsSources([canonicalEspnGame, channel], new Date("2026-09-29T22:00:00.000Z")), 1);
+});
+
+test("temporary DLStreams attestation rejects unrelated channels, games, and time/state windows", () => {
+  const now = new Date("2026-09-29T22:00:00.000Z");
+  const rejectedCases = [
+    { event: astrosPpvCard({ scoreboardEventId: "espn-mlb-401907895" }), channel: attestedDlStreamsChannel() },
+    { event: astrosPpvCard(), channel: attestedDlStreamsChannel({ id: "dlstreams-925", sourceId: "925" }) },
+    { event: astrosPpvCard(), channel: attestedDlStreamsChannel({ title: "ESPN 2 USA" }) },
+    { event: astrosPpvCard({ startsAt: "2026-09-29T20:00:00.000Z" }), channel: attestedDlStreamsChannel() },
+    { event: astrosPpvCard({ status: "upcoming", scheduleState: "pre" }), channel: attestedDlStreamsChannel() },
+    { event: astrosPpvCard({ status: "live", scheduleState: "post" }), channel: attestedDlStreamsChannel() },
+  ];
+  for (const { event, channel } of rejectedCases) {
+    assert.equal(attachTimeLimitedDlStreamsSources([event, channel], now), 0);
+    assert.equal(event.sources.some((source) => source.provider === "DLStreams"), false);
+  }
+
+  for (const instant of ["2026-09-29T20:59:59.999Z", "2026-09-30T03:00:00.000Z"]) {
+    const event = astrosPpvCard();
+    const channel = attestedDlStreamsChannel();
+    assert.equal(attachTimeLimitedDlStreamsSources([event, channel], new Date(instant)), 0, instant);
+  }
 });
 
 test("a near same-team doubleheader stays unbound and holds until earliest kickoff minus 15 minutes", () => {

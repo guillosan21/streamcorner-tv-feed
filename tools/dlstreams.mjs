@@ -1,5 +1,12 @@
 const DLSTREAMS_SITE = "https://dlstreams.st/";
 const DLSTREAMS_CATALOG = new URL("24-7-channels.php", DLSTREAMS_SITE).href;
+const ROMPONALIS_PLAYER_PATHS = new Set([
+  "/premiumtv/daddy2.php",
+  "/premiumtv/daddy3.php",
+]);
+const DADDYLIVE_PLAYER_PATHS = new Set([
+  "/premiumtv/daddy.php",
+]);
 const CHANNEL_LOGOS = JSON.parse(await import("node:fs/promises").then(({ readFile }) =>
   readFile(new URL("./dlstreams-logos.json", import.meta.url), "utf8"),
 ));
@@ -158,8 +165,13 @@ function parsePlayerTemplate(html, expectedId) {
   for (const rawUrl of iframeUrls) {
     try {
       const url = new URL(rawUrl, DLSTREAMS_SITE);
-      if (url.protocol !== "https:" || !url.host.endsWith(".romponalis.st") ||
-          !url.pathname.startsWith("/premiumtv/") || url.searchParams.get("id") !== String(expectedId)) continue;
+      const verifiedHostAndPath = (url.hostname === "daddyliveplayer.st" && DADDYLIVE_PLAYER_PATHS.has(url.pathname)) ||
+        (url.hostname.endsWith(".romponalis.st") && ROMPONALIS_PLAYER_PATHS.has(url.pathname));
+      const channelIds = url.searchParams.getAll("id");
+      const onlyChannelIdParameter = [...url.searchParams.keys()].every((key) => key === "id");
+      if (url.protocol !== "https:" || url.port || url.username || url.password || url.hash ||
+          !verifiedHostAndPath || channelIds.length !== 1 || !onlyChannelIdParameter ||
+          channelIds[0] !== String(expectedId)) continue;
       url.searchParams.set("id", "__CHANNEL_ID__");
       return url.href;
     } catch { /* Ignore malformed third-party frames. */ }

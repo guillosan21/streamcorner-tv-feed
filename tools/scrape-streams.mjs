@@ -105,6 +105,16 @@ function similarTeam(first, second) {
 const MAX_PIZARRA_SCHEDULE_SKEW_MS = 18 * 60 * 60 * 1000;
 const MAX_PIZARRA_NORMAL_SCHEDULE_SKEW_MS = 45 * 60 * 1000;
 const MAX_PIZARRA_UTC_DAY_SKEW = 1;
+const TIME_LIMITED_DLSTREAMS_ATTACHMENTS = Object.freeze([
+  {
+    scoreboardEventId: "espn-mlb-401907896",
+    scoreboardLeagueId: "MLB",
+    eventStartsAt: "2026-09-29T21:00:00.000Z",
+    expiresAt: "2026-09-30T03:00:00.000Z",
+    channelId: "926",
+    channelTitle: "ESPN 2 MX",
+  },
+]);
 
 function isEarlyPizarraEvent(game) {
   return game?.provider === "pizarramx" &&
@@ -371,6 +381,50 @@ export function attachScheduleGames(sourceGames, scheduleGames, now = new Date()
     }
   }
   return deduplicateFeedGames(games.filter((game) => game.scheduleState !== "post"));
+}
+
+export function attachTimeLimitedDlStreamsSources(games, now = new Date()) {
+  const rows = Array.isArray(games) ? games : [];
+  const nowMs = new Date(now).getTime();
+  if (!Number.isFinite(nowMs)) return 0;
+  let attachedCount = 0;
+
+  for (const override of TIME_LIMITED_DLSTREAMS_ATTACHMENTS) {
+    const startMs = Date.parse(override.eventStartsAt);
+    const expiresMs = Date.parse(override.expiresAt);
+    if (nowMs < startMs || nowMs >= expiresMs) continue;
+
+    const channel = rows.find((game) => game?.id === `dlstreams-${override.channelId}` &&
+      game?.provider === "dlstreams" && String(game?.sourceId || "") === override.channelId &&
+      game?.title === override.channelTitle && game?.is24x7 === true);
+    if (!channel) continue;
+    const expectedEmbedUrl = `https://dlstreams.st/stream/stream-${override.channelId}.php`;
+    const channelSources = (channel.sources || []).filter((source) =>
+      source?.provider === "DLStreams" && source?.embedProvider === "DLStreams" &&
+      source?.name === `DLStreams • ${override.channelTitle}` && !source?.url &&
+      source?.embedUrl === expectedEmbedUrl);
+    if (!channelSources.length) continue;
+
+    for (const game of rows) {
+      if (!game || game.is24x7 || game.scoreboardLeagueId !== override.scoreboardLeagueId ||
+          game.scheduleState !== "in" || game.status !== "live") continue;
+      const matchesScoreboardId = String(game.scoreboardEventId || "") === override.scoreboardEventId;
+      const matchesCanonicalEspnIdentity = game.provider === "espn-schedule" && game.id === override.scoreboardEventId;
+      if (!matchesScoreboardId && !matchesCanonicalEspnIdentity) continue;
+
+      const startsAtMs = Date.parse(game.startsAt || "");
+      const endsAtMs = Date.parse(game.endsAt || "");
+      if (startsAtMs !== startMs || !Number.isFinite(endsAtMs) || nowMs >= endsAtMs) continue;
+      if (!Array.isArray(game.sources)) game.sources = [];
+      for (const source of channelSources) {
+        const key = feedSourceKey(source);
+        if (!key || game.sources.some((candidate) => feedSourceKey(candidate) === key)) continue;
+        game.sources.push({ ...source, headers: { ...(source.headers || {}) } });
+        attachedCount += 1;
+      }
+    }
+  }
+  return attachedCount;
 }
 
 function inferredWebProvider(embedUrl) {
@@ -792,6 +846,8 @@ try {
       }
     }
   }
+  const temporaryDlStreamsBroadcastSourceCount = attachTimeLimitedDlStreamsSources(games, now);
+  espnBroadcastSourceCount += temporaryDlStreamsBroadcastSourceCount;
   const collapsedPpvMirrorCount = collapsePpvMirrors(games);
   const duplicateEventPairCount = countRemainingDuplicatePairs(games);
   if (duplicateEventPairCount > 0) throw new Error(`feed still contains ${duplicateEventPairCount} mergeable duplicate event pair(s)`);
@@ -872,6 +928,7 @@ try {
     highflySourceCount: games.flatMap((game) => game.sources).filter((source) => source.provider === "Sports Streams").length,
     addonPpvDuplicatesRemoved,
     espnBroadcastSourceCount,
+    temporaryDlStreamsBroadcastSourceCount,
     ambiguousAddonEvents: addonMatches.ambiguous,
     unmatchedAddonEvents: addonMatches.unmatched,
     highflyErrors: highfly.errors,
@@ -926,6 +983,7 @@ try {
       highflySourceCount: games.flatMap((game) => game.sources).filter((source) => source.provider === "Sports Streams").length,
       addonPpvDuplicatesRemoved,
       espnBroadcastSourceCount,
+      temporaryDlStreamsBroadcastSourceCount,
       unmatchedAddonEvents: addonMatches.unmatched,
       highflyErrors: highfly.errors,
       teamCatalogErrors: teamCatalog.errors,
@@ -956,6 +1014,7 @@ try {
     highflySourceCount: games.flatMap((game) => game.sources).filter((source) => source.provider === "Sports Streams").length,
     addonPpvDuplicatesRemoved,
     espnBroadcastSourceCount,
+    temporaryDlStreamsBroadcastSourceCount,
     unmatchedAddonEvents: addonMatches.unmatched,
     highflyErrors: highfly.errors,
     teamCatalogErrors: teamCatalog.errors,
