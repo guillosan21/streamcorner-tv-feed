@@ -250,9 +250,10 @@ function eventGame(row, detail) {
   // Pizarra's date-only values cannot be safely combined with its display time.
   if (state === "ns" && !startsAt) return null;
   const kind = "e";
-  const sources = sourceOptions(detail?.directo, kind, eventId);
-  if (!sources.length) return null;
   const live = state === "live";
+  const sources = sourceOptions(detail?.directo, kind, eventId)
+    .map((source) => live ? { ...source, availableBeforeKickoff: true } : source);
+  if (!sources.length) return null;
   return {
     id: `pizarramx-${eventId}`,
     provider: "pizarramx",

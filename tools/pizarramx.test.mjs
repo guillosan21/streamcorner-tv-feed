@@ -88,6 +88,7 @@ test("Pizarra event and manual mapping emits URL-free refs with live and schedul
   assert.equal(live.status, "live");
   assert.equal(live.scheduleState, "in");
   assert.equal(live.startsAt, "2026-09-26T20:30:00.000Z");
+  assert.equal(live.sources.every((source) => source.availableBeforeKickoff === true), true);
   assert.equal(live.homeTeam, "Cruz Azul");
   assert.equal(live.title, "Cruz Azul vs Toluca");
   assert.equal(live.sport, "Soccer");
@@ -97,6 +98,7 @@ test("Pizarra event and manual mapping emits URL-free refs with live and schedul
   assert.equal(upcoming.status, "upcoming");
   assert.equal(upcoming.scheduleState, "pre");
   assert.equal(upcoming.startsAt, "2026-09-27T01:05:00.000Z");
+  assert.equal(upcoming.sources.some((source) => source.availableBeforeKickoff === true), false);
 
   const manualGame = games.find((game) => game.id.startsWith("pizarramx-manual-"));
   assert.equal(manualGame.status, "live");

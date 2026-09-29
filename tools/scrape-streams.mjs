@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { fetchTimStreamsGames } from "./timstreams.mjs";
 import { fetchPpvGames } from "./ppvstreams.mjs";
 import { fetchDlStreamsGames, findBroadcastChannelGames } from "./dlstreams.mjs";
@@ -99,7 +100,98 @@ function similarTeam(first, second) {
   return matched >= Math.min(firstTokens.length, secondTokens.length);
 }
 
-function sameFeedEvent(first, second) {
+// Only provider-declared early streams get the wide join window; normal Pizarra
+// event clocks remain limited to the same rounding tolerance as other feeds.
+const MAX_PIZARRA_SCHEDULE_SKEW_MS = 18 * 60 * 60 * 1000;
+const MAX_PIZARRA_NORMAL_SCHEDULE_SKEW_MS = 45 * 60 * 1000;
+const MAX_PIZARRA_UTC_DAY_SKEW = 1;
+
+function isEarlyPizarraEvent(game) {
+  return game?.provider === "pizarramx" &&
+    (game.sources || []).some((source) => source?.availableBeforeKickoff === true);
+}
+
+function hasExplicitDoubleheaderMarker(game) {
+  return /\b(?:game|match)\s*[12]\b|\b(?:1st|2nd)\s+(?:game|match)\b|\bdouble[- ]?header\b/i.test(
+    `${game.title || ""} ${game.homeTeam || ""} ${game.awayTeam || ""}`);
+}
+
+function scheduleSportKey(game) {
+  const value = canonicalTeam(game?.sport || "");
+  if (["football", "soccer", "association football"].includes(value)) return "soccer";
+  if (["nfl", "american football", "football americano"].includes(value)) return "american football";
+  if (["mlb", "baseball"].includes(value)) return "baseball";
+  if (["nba", "wnba", "basketball"].includes(value)) return "basketball";
+  if (["nhl", "hockey", "ice hockey"].includes(value)) return "hockey";
+  return value;
+}
+
+function scheduleLeagueKey(game) {
+  const value = canonicalTeam(game?.league || game?.scoreboardLeagueId || "");
+  const aliases = {
+    "liga bbva mx": "liga mx",
+    "major league baseball": "mlb",
+    "uefa champions league": "champions league",
+    "uefa europa league": "europa league",
+  };
+  return aliases[value] || value;
+}
+
+function exactCompatibleMatchup(first, second) {
+  if (hasExplicitDoubleheaderMarker(first) || hasExplicitDoubleheaderMarker(second)) return false;
+  if (!scheduleSportKey(first) || scheduleSportKey(first) !== scheduleSportKey(second)) return false;
+  const firstLeague = scheduleLeagueKey(first);
+  if (!firstLeague || firstLeague !== scheduleLeagueKey(second)) return false;
+  const left = eventSides(first);
+  const right = eventSides(second);
+  if (left.length !== 2 || right.length !== 2) return false;
+  return (left[0] === right[0] && left[1] === right[1]) ||
+    (left[0] === right[1] && left[1] === right[0]);
+}
+
+function pizarraCompatibleScheduleCandidates(game, scheduleGames) {
+  if (game?.provider !== "pizarramx") return [];
+  const gameStart = Date.parse(game.startsAt || "");
+  if (!Number.isFinite(gameStart)) return [];
+  const allowedSkew = isEarlyPizarraEvent(game)
+    ? MAX_PIZARRA_SCHEDULE_SKEW_MS
+    : MAX_PIZARRA_NORMAL_SCHEDULE_SKEW_MS;
+  const gameDay = Math.floor(gameStart / 86_400_000);
+  return scheduleGames.filter((candidate) => {
+    const candidateStart = Date.parse(candidate?.startsAt || "");
+    const state = String(candidate?.scheduleState || "").toLowerCase();
+    return String(candidate?.scoreboardEventId || "").trim() && Number.isFinite(candidateStart) &&
+      ["pre", "in", "post"].includes(state) &&
+      Math.abs(candidateStart - gameStart) <= allowedSkew &&
+      Math.abs(Math.floor(candidateStart / 86_400_000) - gameDay) <= MAX_PIZARRA_UTC_DAY_SKEW &&
+      exactCompatibleMatchup(game, candidate);
+  });
+}
+
+export function pizarraScheduleSkewMatches(game, scheduled, sourceGames, scheduleGames) {
+  if (game?.provider !== "pizarramx") return false;
+  const candidates = pizarraCompatibleScheduleCandidates(game, scheduleGames);
+  const scheduledId = String(scheduled?.scoreboardEventId || "").trim();
+  if (candidates.length !== 1 || !scheduledId ||
+      String(candidates[0].scoreboardEventId).trim() !== scheduledId ||
+      !exactCompatibleMatchup(game, candidates[0])) return false;
+
+  const otherPizarraRows = sourceGames.filter((candidate) => candidate.id !== game.id &&
+    candidate.provider === "pizarramx" && pizarraCompatibleScheduleCandidates(candidate, [scheduled]).length > 0);
+  return otherPizarraRows.length === 0;
+}
+
+export function sameFeedEvent(first, second) {
+  const firstScoreboardId = String(first.scoreboardEventId || "").trim();
+  const secondScoreboardId = String(second.scoreboardEventId || "").trim();
+  if ((first.doNotAttachToOfficialSchedule && secondScoreboardId) ||
+      (second.doNotAttachToOfficialSchedule && firstScoreboardId)) return false;
+  if (firstScoreboardId && secondScoreboardId) return firstScoreboardId.toLowerCase() === secondScoreboardId.toLowerCase();
+  if ((first.provider === "pizarramx" && secondScoreboardId) ||
+      (second.provider === "pizarramx" && firstScoreboardId)) return false;
+  if ((first.provider === "pizarramx" && !firstScoreboardId && first.id !== second.id) ||
+      (second.provider === "pizarramx" && !secondScoreboardId && first.id !== second.id)) return false;
+  if (hasExplicitDoubleheaderMarker(first) || hasExplicitDoubleheaderMarker(second)) return false;
   if (!first.startsAt || !second.startsAt) return first.id === second.id;
   if (Math.abs(Date.parse(first.startsAt) - Date.parse(second.startsAt)) > 30 * 60 * 1000) return false;
   const left = eventSides(first);
@@ -109,7 +201,25 @@ function sameFeedEvent(first, second) {
     (similarTeam(left[0], right[1]) && similarTeam(left[1], right[0]));
 }
 
-function deduplicateFeedGames(rows) {
+export function deduplicateFeedSources(...sourceGroups) {
+  const sources = [];
+  const byKey = new Map();
+  for (const source of sourceGroups.flatMap((group) => Array.isArray(group) ? group : [])) {
+    const key = feedSourceKey(source);
+    if (!key || !byKey.has(key)) {
+      if (key) byKey.set(key, sources.length);
+      sources.push(source);
+      continue;
+    }
+    const index = byKey.get(key);
+    if (source?.availableBeforeKickoff === true && sources[index]?.availableBeforeKickoff !== true) {
+      sources[index] = { ...sources[index], availableBeforeKickoff: true };
+    }
+  }
+  return sources;
+}
+
+export function deduplicateFeedGames(rows) {
   let current = rows;
   while (true) {
   const merged = [];
@@ -119,20 +229,49 @@ function deduplicateFeedGames(rows) {
       merged.push(game);
       continue;
     }
-    const sourceKeys = new Set(existing.sources.map(feedSourceKey));
-    for (const source of game.sources) {
-      const key = feedSourceKey(source);
-      if (!sourceKeys.has(key)) { existing.sources.push(source); sourceKeys.add(key); }
-    }
+    const preservedSources = deduplicateFeedSources(existing.sources, game.sources);
+    const pendingKickoffHold = [existing.awaitingOfficialKickoffUntil, game.awaitingOfficialKickoffUntil]
+      .map((value) => Date.parse(value || ""))
+      .filter(Number.isFinite)
+      .reduce((latest, value) => Math.max(latest, value), Number.NEGATIVE_INFINITY);
+    const doNotAttachToOfficialSchedule = Boolean(existing.doNotAttachToOfficialSchedule || game.doNotAttachToOfficialSchedule);
+    const officialStateRank = (row) => ({ pre: 1, in: 2, post: 3 }[String(row.scheduleState || "").toLowerCase()] || 0);
+    const authoritativeSchedule = [existing, game]
+      .filter((row) => String(row.scoreboardEventId || "").trim())
+      .sort((left, right) => officialStateRank(right) - officialStateRank(left))[0];
+    const officialFields = authoritativeSchedule ? {
+      startsAt: authoritativeSchedule.startsAt,
+      endsAt: authoritativeSchedule.endsAt,
+      status: authoritativeSchedule.status,
+      scheduleState: authoritativeSchedule.scheduleState,
+      scoreboardLeagueId: authoritativeSchedule.scoreboardLeagueId,
+      scoreboardEventId: authoritativeSchedule.scoreboardEventId,
+      homeScore: authoritativeSchedule.homeScore,
+      awayScore: authoritativeSchedule.awayScore,
+      scoreDetail: authoritativeSchedule.scoreDetail,
+      espnBroadcasts: authoritativeSchedule.espnBroadcasts,
+    } : null;
     const authority = (row) => (row.scoreboardLeagueId ? 8 : 0) + (row.scheduleState ? 4 : 0) +
       (String(row.homeLogoUrl || "").includes("espncdn.com") && String(row.awayLogoUrl || "").includes("espncdn.com") ? 2 : 0) +
       (row.venue ? 1 : 0);
     if (authority(game) > authority(existing)) {
-      const preservedSources = existing.sources;
       Object.assign(existing, game);
-      existing.sources = preservedSources;
     }
-    if (game.status === "live") existing.status = "live";
+    existing.sources = preservedSources;
+    if (Number.isFinite(pendingKickoffHold)) {
+      existing.awaitingOfficialKickoffUntil = new Date(pendingKickoffHold).toISOString();
+    } else {
+      delete existing.awaitingOfficialKickoffUntil;
+    }
+    if (doNotAttachToOfficialSchedule) existing.doNotAttachToOfficialSchedule = true;
+    else delete existing.doNotAttachToOfficialSchedule;
+    if (officialFields) {
+      Object.assign(existing, officialFields);
+      if (String(officialFields.scheduleState || "").toLowerCase() === "in") existing.status = "live";
+      else if (String(officialFields.scheduleState || "").toLowerCase() === "pre") existing.status = "upcoming";
+    } else if (game.status === "live") {
+      existing.status = "live";
+    }
     if (!existing.venue && game.venue) existing.venue = game.venue;
     if (!existing.homeLogoUrl && game.homeLogoUrl) existing.homeLogoUrl = game.homeLogoUrl;
     if (!existing.awayLogoUrl && game.awayLogoUrl) existing.awayLogoUrl = game.awayLogoUrl;
@@ -151,6 +290,87 @@ function countRemainingDuplicatePairs(rows) {
     }
   }
   return count;
+}
+
+function scheduleMatchForSource(game, scheduled, sourceGames, scheduleGames) {
+  const sourceScoreboardId = String(game.scoreboardEventId || "").trim();
+  const scheduledScoreboardId = String(scheduled.scoreboardEventId || "").trim();
+  if (sourceScoreboardId && scheduledScoreboardId) {
+    return sourceScoreboardId.toLowerCase() === scheduledScoreboardId.toLowerCase();
+  }
+  if (game.provider === "pizarramx") {
+    return pizarraScheduleSkewMatches(game, scheduled, sourceGames, scheduleGames);
+  }
+
+  const gameTeams = [canonicalTeam(game.homeTeam), canonicalTeam(game.awayTeam)].filter(Boolean).sort().join("|");
+  const scheduledTeams = [canonicalTeam(scheduled.homeTeam), canonicalTeam(scheduled.awayTeam)].filter(Boolean).sort().join("|");
+  const normalizedTitle = canonicalTeam(game.title);
+  const home = canonicalTeam(scheduled.homeTeam);
+  const away = canonicalTeam(scheduled.awayTeam);
+  const titleMatches = home && away && normalizedTitle.includes(home) && normalizedTitle.includes(away);
+  const closeInTime = Math.abs(Date.parse(game.startsAt) - Date.parse(scheduled.startsAt)) <= 45 * 60 * 1000;
+  const sameExternalId = game.sourceId && scheduled.sourceId && String(game.sourceId) === String(scheduled.sourceId);
+  return sameExternalId || (closeInTime && (gameTeams === scheduledTeams || titleMatches));
+}
+
+export function attachScheduleGames(sourceGames, scheduleGames, now = new Date()) {
+  const games = [...sourceGames];
+  const matchedSourceGames = new Set();
+  for (const scheduled of scheduleGames) {
+    const scheduledTeams = [canonicalTeam(scheduled.homeTeam), canonicalTeam(scheduled.awayTeam)].filter(Boolean).sort().join("|");
+    const matches = games.filter((game) => !matchedSourceGames.has(game.id) && scheduledTeams &&
+      scheduleMatchForSource(game, scheduled, sourceGames, scheduleGames));
+    if (matches.length) {
+      for (const match of matches) {
+        matchedSourceGames.add(match.id);
+        match.title = scheduled.title;
+        match.league = scheduled.league;
+        match.sport = scheduled.sport;
+        match.startsAt = scheduled.startsAt;
+        match.endsAt = scheduled.endsAt;
+        match.homeTeam = scheduled.homeTeam;
+        match.awayTeam = scheduled.awayTeam;
+        if (!isMissingVenue(scheduled.venue)) match.venue = scheduled.venue;
+        match.homeLogoUrl ||= scheduled.homeLogoUrl;
+        match.awayLogoUrl ||= scheduled.awayLogoUrl;
+        match.scheduleState = scheduled.scheduleState;
+        match.status = scheduled.status;
+        match.scoreboardLeagueId = scheduled.scoreboardLeagueId;
+        match.scoreboardEventId = scheduled.scoreboardEventId;
+        match.homeScore = scheduled.homeScore;
+        match.awayScore = scheduled.awayScore;
+        match.scoreDetail = scheduled.scoreDetail;
+        match.espnBroadcasts = scheduled.espnBroadcasts;
+        match.sources = deduplicateFeedSources(match.sources, scheduled.sources);
+      }
+    } else if (scheduled.scheduleState !== "post") {
+      games.push(scheduled);
+    }
+  }
+
+  const nowMs = Date.parse(now instanceof Date ? now.toISOString() : now);
+  for (const game of games) {
+    if (game.provider !== "pizarramx") continue;
+    delete game.awaitingOfficialKickoffUntil;
+    delete game.doNotAttachToOfficialSchedule;
+    if (String(game.scoreboardEventId || "").trim()) continue;
+    game.doNotAttachToOfficialSchedule = true;
+    // Android honors this hold and source flag while its narrower local event
+    // matcher waits; keeping the durable guard also prevents later score joins
+    // from guessing between same-team doubleheaders.
+    if (!Number.isFinite(nowMs) || !isEarlyPizarraEvent(game)) continue;
+    const candidates = pizarraCompatibleScheduleCandidates(game, scheduleGames);
+    const allFarPre = candidates.length > 0 && candidates.every((candidate) => {
+      const start = Date.parse(candidate.startsAt || "");
+      return String(candidate.scheduleState || "").toLowerCase() === "pre" &&
+        Number.isFinite(start) && start - nowMs > 15 * 60 * 1000;
+    });
+    if (allFarPre) {
+      const earliestStart = Math.min(...candidates.map((candidate) => Date.parse(candidate.startsAt)));
+      game.awaitingOfficialKickoffUntil = new Date(earliestStart - 15 * 60 * 1000).toISOString();
+    }
+  }
+  return deduplicateFeedGames(games.filter((game) => game.scheduleState !== "post"));
 }
 
 function inferredWebProvider(embedUrl) {
@@ -400,6 +620,7 @@ function isSupportedSportsEntry(game) {
   return !game.is24x7 || SPORTS_24X7_SIGNAL.test(description);
 }
 
+async function main() {
 const tempDirectory = await mkdtemp(join(tmpdir(), "streamcorner-scrape-"));
 
 try {
@@ -538,51 +759,9 @@ try {
   console.log("Fetching ESPN schedules and scoreboards");
   const schedule = await fetchMajorLeagueSchedules(now);
   console.log(`ESPN schedule coverage accepted: ${Math.round(schedule.scheduleCoverage.coverage * 100)}% (${schedule.scheduleCoverage.successfulSlots}/${schedule.scheduleCoverage.expectedSlots} league/date slots)`);
-  const scheduledGames = [...schedule.games, ...schedule.completed];
-  const matchedSourceGames = new Set();
-  for (const scheduled of scheduledGames) {
-    const scheduledTeams = [canonicalTeam(scheduled.homeTeam), canonicalTeam(scheduled.awayTeam)].filter(Boolean).sort().join("|");
-    const matches = games.filter((game) => {
-      const gameTeams = [canonicalTeam(game.homeTeam), canonicalTeam(game.awayTeam)].filter(Boolean).sort().join("|");
-      const normalizedTitle = canonicalTeam(game.title);
-      const titleMatches = canonicalTeam(scheduled.homeTeam) && canonicalTeam(scheduled.awayTeam)
-        && normalizedTitle.includes(canonicalTeam(scheduled.homeTeam))
-        && normalizedTitle.includes(canonicalTeam(scheduled.awayTeam));
-      // Names alone are unsafe for doubleheaders and same-day rematches. ESPN IDs
-      // are exact; provider-title fallback is deliberately limited to clock rounding.
-      const closeInTime = Math.abs(Date.parse(game.startsAt) - Date.parse(scheduled.startsAt)) <= 45 * 60 * 1000;
-      const sameExternalId = game.sourceId && scheduled.sourceId && String(game.sourceId) === String(scheduled.sourceId);
-      return !matchedSourceGames.has(game.id) && scheduledTeams && (sameExternalId || (closeInTime && (gameTeams === scheduledTeams || titleMatches)));
-    });
-    if (matches.length) {
-      for (const match of matches) {
-        matchedSourceGames.add(match.id);
-        // Normalize a matched provider event to ESPN's authoritative event identity.
-        // Provider titles and rounded start times otherwise prevent source merging.
-        match.title = scheduled.title;
-        match.league = scheduled.league;
-        match.sport = scheduled.sport;
-        match.startsAt = scheduled.startsAt;
-        match.endsAt = scheduled.endsAt;
-        match.homeTeam = scheduled.homeTeam;
-        match.awayTeam = scheduled.awayTeam;
-        if (!isMissingVenue(scheduled.venue)) match.venue = scheduled.venue;
-        match.homeLogoUrl ||= scheduled.homeLogoUrl;
-        match.awayLogoUrl ||= scheduled.awayLogoUrl;
-        match.scheduleState = scheduled.scheduleState;
-        match.status = scheduled.status;
-        match.scoreboardLeagueId = scheduled.scoreboardLeagueId;
-        match.scoreboardEventId = scheduled.scoreboardEventId;
-        match.homeScore = scheduled.homeScore;
-        match.awayScore = scheduled.awayScore;
-        match.scoreDetail = scheduled.scoreDetail;
-        match.espnBroadcasts = scheduled.espnBroadcasts;
-      }
-    } else if (scheduled.scheduleState !== "post") {
-      games.push(scheduled);
-    }
-  }
-  games = deduplicateFeedGames(games.filter((game) => game.scheduleState !== "post"));
+  const scheduledGames = [...new Map([...schedule.games, ...schedule.completed]
+    .map((game) => [String(game.scoreboardEventId || game.id), game])).values()];
+  games = attachScheduleGames(games, scheduledGames, now);
   console.log("Fetching Sports Streams catalog");
   const highfly = await fetchHighflyGames(now);
   catalogCounts.highfly = highfly.catalogCount;
@@ -786,3 +965,6 @@ try {
 } finally {
   await rm(tempDirectory, { recursive: true, force: true });
 }
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] || "").href) await main();
