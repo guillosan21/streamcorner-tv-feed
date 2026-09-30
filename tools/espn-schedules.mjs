@@ -77,6 +77,36 @@ function isRetryable(error) {
     error instanceof SyntaxError || ["TimeoutError", "AbortError"].includes(error?.name);
 }
 
+function isExplicitDelayedScheduleObservation(event) {
+  const type = event?.status?.type || {};
+  const state = String(type.state || "").toLowerCase();
+  if (state !== "pre" && state !== "in") return false;
+  const labels = [type.name, type.description, type.detail, type.shortDetail]
+    .map((value) => String(value || "").trim()).filter(Boolean);
+  if (labels.some((value) => /\b(?:postponed|rescheduled|cancelled|canceled|final)\b/i.test(value))) return false;
+  if (labels.some((value) => /^(?:delayed|delay)\s+penalty\b/i.test(value))) return false;
+  if (/^STATUS_(?:WEATHER_)?DELAYED$/i.test(String(type.name || "").trim())) return true;
+  if (/^(?:weather\s+)?delay(?:ed)?[.!]?$/i.test(String(type.description || "").trim())) return true;
+  return [type.detail, type.shortDetail].some((value) => {
+    const text = String(value || "").trim();
+    return /^(?:the\s+)?(?:game\s+)?(?:weather\s+)?delayed(?:\s+(?:until|to)\b|\s*[:—–-])/i.test(text) ||
+      /^(?:weather\s+)?delay(?:ed)?[.!]?$/i.test(text);
+  });
+}
+
+function stableEventKey(event) {
+  const type = event?.status?.type || {};
+  const competitors = (event?.competitions?.[0]?.competitors || []).map((team) => [
+    String(team?.homeAway || ""), String(team?.team?.id || ""),
+    String(team?.team?.displayName || team?.team?.name || ""), String(team?.score ?? ""),
+  ]).sort((first, second) => first.join("\u0000").localeCompare(second.join("\u0000")));
+  return JSON.stringify([
+    String(event?.date || ""), String(type.state || ""), String(type.name || ""),
+    String(type.description || ""), String(type.detail || ""), String(type.shortDetail || ""),
+    competitors,
+  ]);
+}
+
 function uniqueEvents(events) {
   const byId = new Map();
   for (const event of events) {
@@ -87,8 +117,18 @@ function uniqueEvents(events) {
     const completeness = (value) => (value?.competitions?.[0]?.competitors || []).reduce(
       (sum, team) => sum + (String(team?.score ?? "").trim() ? 1 : 0), 0,
     );
-    if (!old || stateRank(event?.status?.type?.state) > stateRank(old?.status?.type?.state) ||
-        (stateRank(event?.status?.type?.state) === stateRank(old?.status?.type?.state) && completeness(event) > completeness(old))) {
+    const incomingStateRank = stateRank(event?.status?.type?.state);
+    const oldStateRank = stateRank(old?.status?.type?.state);
+    const incomingDelayed = isExplicitDelayedScheduleObservation(event);
+    const oldDelayed = isExplicitDelayedScheduleObservation(old);
+    const incomingWins = !old || incomingStateRank > oldStateRank ||
+      (incomingStateRank === oldStateRank && (
+        (incomingDelayed !== oldDelayed && !incomingDelayed) ||
+        (incomingDelayed === oldDelayed && completeness(event) > completeness(old)) ||
+        (incomingDelayed === oldDelayed && completeness(event) === completeness(old) &&
+          stableEventKey(event).localeCompare(stableEventKey(old)) < 0)
+      ));
+    if (incomingWins) {
       byId.set(id, event);
     }
   }

@@ -211,6 +211,48 @@ export function sameFeedEvent(first, second) {
     (similarTeam(left[0], right[1]) && similarTeam(left[1], right[0]));
 }
 
+export function isExplicitEspnDelayedEvent(event) {
+  const type = event?.status?.type || {};
+  const state = String(type.state || "").toLowerCase();
+  if (state !== "pre" && state !== "in") return false;
+  const labels = [type.name, type.description, type.detail, type.shortDetail]
+    .map((value) => String(value || "").trim()).filter(Boolean);
+  if (labels.some((value) => /\b(?:postponed|rescheduled|cancelled|canceled|final)\b/i.test(value))) return false;
+  if (labels.some((value) => /^(?:delayed|delay)\s+penalty\b/i.test(value))) return false;
+  if (/^STATUS_(?:WEATHER_)?DELAYED$/i.test(String(type.name || "").trim())) return true;
+  if (/^(?:weather\s+)?delay(?:ed)?[.!]?$/i.test(String(type.description || "").trim())) return true;
+  return [type.detail, type.shortDetail].some((value) => {
+    const text = String(value || "").trim();
+    return /^(?:the\s+)?(?:game\s+)?(?:weather\s+)?delayed(?:\s+(?:until|to)\b|\s*[:—–-])/i.test(text) ||
+      /^(?:weather\s+)?delay(?:ed)?[.!]?$/i.test(text);
+  });
+}
+
+export function parseExplicitEspnRestartAt(...details) {
+  for (const raw of details) {
+    const match = /^(?:the\s+)?(?:game\s+)?(?:weather\s+)?delayed\s+(?:until|to)\s+(.+)$/i.exec(String(raw || "").trim());
+    if (!match) continue;
+    const value = match[1].trim().replace(/\s+at\s+/i, " ");
+    // A date, clock, and explicit zone are all mandatory. Never derive this value
+    // from event.date or from a bare clock such as "8:00 PM".
+    if (!/\b\d{4}\b/.test(value) || !/\b\d{1,2}:\d{2}\b/.test(value) ||
+        !/(?:\b(?:UTC|GMT|EST|EDT|CST|CDT|MST|MDT|PST|PDT)\b|(?:Z|[+-]\d{2}:?\d{2}))$/i.test(value)) continue;
+    const epoch = Date.parse(value);
+    if (Number.isFinite(epoch)) return new Date(epoch).toISOString();
+  }
+  return "";
+}
+
+const MAX_DELAYED_EVENT_AGE_MS = 48 * 60 * 60 * 1000;
+
+export function isEspnDelayedGameWithinStaleLimit(game, nowMs) {
+  if (game?.isDelayed !== true || !["pre", "in"].includes(String(game.scheduleState || "").toLowerCase())) return false;
+  const startsAt = Date.parse(game.startsAt || "");
+  // Future kickoff instants are not stale; only a delay more than 48 hours beyond
+  // its original scheduled start expires.
+  return Number.isFinite(startsAt) && nowMs - startsAt <= MAX_DELAYED_EVENT_AGE_MS;
+}
+
 export function deduplicateFeedSources(...sourceGroups) {
   const sources = [];
   const byKey = new Map();
@@ -260,6 +302,9 @@ export function deduplicateFeedGames(rows) {
       awayScore: authoritativeSchedule.awayScore,
       scoreDetail: authoritativeSchedule.scoreDetail,
       espnBroadcasts: authoritativeSchedule.espnBroadcasts,
+      isDelayed: authoritativeSchedule.scheduleState !== "post" && authoritativeSchedule.isDelayed === true,
+      restartAt: authoritativeSchedule.scheduleState !== "post" && authoritativeSchedule.isDelayed === true
+        ? String(authoritativeSchedule.restartAt || "") : "",
     } : null;
     const authority = (row) => (row.scoreboardLeagueId ? 8 : 0) + (row.scheduleState ? 4 : 0) +
       (String(row.homeLogoUrl || "").includes("espncdn.com") && String(row.awayLogoUrl || "").includes("espncdn.com") ? 2 : 0) +
@@ -345,6 +390,8 @@ export function attachScheduleGames(sourceGames, scheduleGames, now = new Date()
         match.awayLogoUrl ||= scheduled.awayLogoUrl;
         match.scheduleState = scheduled.scheduleState;
         match.status = scheduled.status;
+        match.isDelayed = scheduled.scheduleState !== "post" && scheduled.isDelayed === true;
+        match.restartAt = match.isDelayed ? String(scheduled.restartAt || "") : "";
         match.scoreboardLeagueId = scheduled.scoreboardLeagueId;
         match.scoreboardEventId = scheduled.scoreboardEventId;
         match.homeScore = scheduled.homeScore;
@@ -547,9 +594,13 @@ async function fetchMajorLeagueSchedules(now) {
       for (const event of events) {
         const competition = event?.competitions?.[0] || {};
         const scheduleState = String(event?.status?.type?.state || "").toLowerCase();
-        if (league.liveOnly && scheduleState !== "in") continue;
+        const isDelayed = isExplicitEspnDelayedEvent(event);
+        if (league.liveOnly && scheduleState !== "in" && !isDelayed) continue;
         const startsAt = new Date(event.date);
         if (!Number.isFinite(startsAt.getTime())) continue;
+        const delayedWithinStaleLimit = isDelayed && isEspnDelayedGameWithinStaleLimit({
+          isDelayed: true, scheduleState, startsAt: startsAt.toISOString(),
+        }, now.getTime());
         const competitors = Array.isArray(competition.competitors) ? competition.competitors : [];
         const home = competitors.find((item) => item.homeAway === "home") || {};
         const away = competitors.find((item) => item.homeAway === "away") || {};
@@ -568,6 +619,9 @@ async function fetchMajorLeagueSchedules(now) {
         const homeScore = String(home.score ?? "").trim();
         const awayScore = String(away.score ?? "").trim();
         const scoreDetail = String(event?.status?.type?.shortDetail || event?.status?.type?.detail || event?.status?.displayClock || "").trim();
+        const restartAt = isDelayed
+          ? parseExplicitEspnRestartAt(event?.status?.type?.detail, event?.status?.type?.shortDetail)
+          : "";
         const espnBroadcasts = [...new Set((Array.isArray(competition.broadcasts) ? competition.broadcasts : [])
           .flatMap((broadcast) => Array.isArray(broadcast?.names) ? broadcast.names : [])
           .map((name) => String(name || "").trim()).filter(Boolean))];
@@ -580,6 +634,8 @@ async function fetchMajorLeagueSchedules(now) {
           status: scheduleState === "in" ? "live" : "upcoming", scheduleState, is24x7: false,
           scoreboardLeagueId: league.id,
           scoreboardEventId: event.id ? `espn-${league.id.toLowerCase()}-${event.id}` : "",
+          isDelayed: isDelayed && scheduleState !== "post",
+          ...(restartAt ? { restartAt } : {}),
           espnBroadcasts,
           homeScore, awayScore, scoreDetail,
           homeTeam, awayTeam,
@@ -587,11 +643,14 @@ async function fetchMajorLeagueSchedules(now) {
           awayLogoUrl: String(away.team?.logo || "").replace(/^http:/, "https:"),
           posterUrl: "", categoryLogoUrl: "", venue, sources: [],
         };
-        if ((scheduleState === "in" || scheduleState === "post") && startsAt >= historyStart) {
+        if ((scheduleState === "in" || scheduleState === "post" || (scheduleState === "pre" && isDelayed)) &&
+            startsAt >= historyStart && (!isDelayed || delayedWithinStaleLimit)) {
           scores.push({
             id: `espn-${league.id.toLowerCase()}-${event.id}`,
             leagueId: league.id, league: league.name, sport: league.sport,
             startsAt: startsAt.toISOString(), state: scheduleState, statusDetail: scoreDetail,
+            isDelayed: isDelayed && scheduleState !== "post",
+            ...(restartAt ? { restartAt } : {}),
             homeTeam, awayTeam, homeScore, awayScore,
             homeLogoUrl: String(home.team?.logo || "").replace(/^http:/, "https:"),
             awayLogoUrl: String(away.team?.logo || "").replace(/^http:/, "https:"),
@@ -599,7 +658,7 @@ async function fetchMajorLeagueSchedules(now) {
           });
         }
         if (scheduleState === "post") { completed.push(scheduledGame); continue; }
-        if (endSeconds <= nowSeconds) continue;
+        if (endSeconds <= nowSeconds && !delayedWithinStaleLimit) continue;
         games.push(scheduledGame);
       }
   }
@@ -609,6 +668,7 @@ async function fetchMajorLeagueSchedules(now) {
 function activeGameAt(game, nowMs) {
   if (game?.scheduleState === "post") return false;
   if (game?.is24x7) return true;
+  if (game?.isDelayed) return isEspnDelayedGameWithinStaleLimit(game, nowMs);
   const startsAt = Date.parse(game?.startsAt || "");
   const endsAt = Date.parse(game?.endsAt || "");
   if (game?.status === "upcoming") return Number.isFinite(startsAt) && startsAt > nowMs && (!Number.isFinite(endsAt) || endsAt > nowMs);

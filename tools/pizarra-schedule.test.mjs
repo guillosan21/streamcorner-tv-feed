@@ -5,6 +5,9 @@ import {
   attachTimeLimitedDlStreamsSources,
   deduplicateFeedGames,
   deduplicateFeedSources,
+  isEspnDelayedGameWithinStaleLimit,
+  isExplicitEspnDelayedEvent,
+  parseExplicitEspnRestartAt,
   sameFeedEvent,
 } from "./scrape-streams.mjs";
 import { parsePizarraMxCatalog } from "./pizarramx.mjs";
@@ -58,6 +61,32 @@ function espnGame(id, startsAt, overrides = {}) {
     ...overrides,
   };
 }
+
+test("ESPN delay classification is limited to explicit pre/in event statuses", () => {
+  assert.equal(isExplicitEspnDelayedEvent({ status: { type: { state: "pre", name: "STATUS_DELAYED" } } }), true);
+  assert.equal(isExplicitEspnDelayedEvent({ status: { type: { state: "in", description: "Weather Delay" } } }), true);
+  assert.equal(isExplicitEspnDelayedEvent({ status: { type: { state: "in", detail: "Delayed penalty" } } }), false);
+  assert.equal(isExplicitEspnDelayedEvent({ status: { type: { state: "in", name: "STATUS_DELAYED", detail: "Delayed penalty" } } }), false);
+  assert.equal(isExplicitEspnDelayedEvent({ status: { type: { state: "post", name: "STATUS_DELAYED" } } }), false);
+  assert.equal(isExplicitEspnDelayedEvent({ status: { type: { state: "pre", description: "Postponed" } } }), false);
+});
+
+test("ESPN restart times require a complete date, time, and zone", () => {
+  assert.equal(parseExplicitEspnRestartAt("Delayed until 8:00 PM"), "");
+  assert.equal(parseExplicitEspnRestartAt("Weather Delay"), "");
+  assert.equal(parseExplicitEspnRestartAt("Delayed until Sep 30, 2026 at 8:00 PM EDT"), "2026-10-01T00:00:00.000Z");
+});
+
+test("delayed schedule rows survive original estimated end only within a bounded stale window", () => {
+  const now = Date.parse("2026-09-30T00:00:00.000Z");
+  const fresh = { isDelayed: true, scheduleState: "pre", startsAt: "2026-09-29T22:00:00.000Z" };
+  assert.equal(isEspnDelayedGameWithinStaleLimit(fresh, now), true);
+  assert.equal(isEspnDelayedGameWithinStaleLimit({ ...fresh, startsAt: "2026-10-01T22:00:00.000Z" }, now), true);
+  assert.equal(isEspnDelayedGameWithinStaleLimit({ ...fresh, startsAt: "2026-09-27T22:00:00.000Z" }, now), false);
+  assert.equal(isEspnDelayedGameWithinStaleLimit({ ...fresh, scheduleState: "in", startsAt: "2026-09-27T22:00:00.000Z" }, now), false);
+  assert.equal(isEspnDelayedGameWithinStaleLimit({ ...fresh, scheduleState: "post" }, now), false);
+  assert.equal(isEspnDelayedGameWithinStaleLimit({ ...fresh, isDelayed: false }, now), false);
+});
 
 test("live Pizarra marker enables a unique multi-hour ESPN kickoff match", () => {
   const pizarra = pizarraGame();
