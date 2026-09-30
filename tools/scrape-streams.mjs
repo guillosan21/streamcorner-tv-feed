@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { fetchTimStreamsGames } from "./timstreams.mjs";
+import { collectSportsUpaMainGames, isSportsUpaMainSource } from "./sportsupa.mjs";
 import { fetchPpvGames } from "./ppvstreams.mjs";
 import { fetchDlStreamsGames, findBroadcastChannelGames } from "./dlstreams.mjs";
 import { fetchHighflyGames, attachAddonSources, preferAddonOverPpv } from "./highfly.mjs";
@@ -500,11 +501,14 @@ function sourceProvenanceErrors(rows) {
       if (isRetiredSource(source)) {
         errors.push(`${game.id}: retired Streamed source cannot be published`);
       }
-      if (!["StreamCorner", "TimStreams", "PPV", "Sports Streams", "DLStreams", "Pizarra MX"].includes(provider)) {
+      if (!["StreamCorner", "TimStreams", "PPV", "Sports Streams", "DLStreams", "Pizarra MX", "SportsUpa"].includes(provider)) {
         errors.push(`${game.id}: invalid provider ${provider || "<empty>"}`);
       }
       if (!String(source.name || "").startsWith(`${provider} • `)) {
         errors.push(`${game.id}: label ${source.name || "<empty>"} disagrees with ${provider || "<empty>"}`);
+      }
+      if (provider === "SportsUpa" && !isSportsUpaMainSource(source)) {
+        errors.push(`${game.id}: SportsUpa requires an affirmative HD canonical Main ingest source`);
       }
       if (provider === "Pizarra MX" && (!isPizarraRef || source.url || source.embedUrl || Object.keys(source.headers || {}).length)) {
         errors.push(`${game.id}: Pizarra MX source must be an exact opaque ref without published transport state`);
@@ -676,6 +680,7 @@ function activeGameAt(game, nowMs) {
 }
 
 async function inspectStreamCapabilities(source, provider = "") {
+  if (source.provider === "SportsUpa") return isSportsUpaMainSource(source) ? source : null;
   if (source.provider === "Pizarra MX" && isValidPizarraMxSourceRef(source.providerSourceRef) &&
       !source.url && !source.embedUrl && !Object.keys(source.headers || {}).length) return source;
   if (!source.url) {
@@ -868,6 +873,16 @@ try {
       games.push(...retained);
       console.warn(`Pizarra MX retained ${retained.length} recent prior card(s) after fetch failure`);
     }
+  }
+
+  console.log("Fetching SportsUpa HD Main catalog");
+  try {
+    const sportsUpa = await collectSportsUpaMainGames({ now });
+    catalogCounts.sportsupaMain = sportsUpa.length;
+    games.push(...sportsUpa.filter(isSupportedSportsEntry));
+  } catch {
+    catalogCounts.sportsupaMain = 0;
+    console.warn("SportsUpa Main catalog unavailable; omitted without changing other providers");
   }
 
   console.log("Fetching ESPN schedules and scoreboards");

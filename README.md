@@ -1,5 +1,7 @@
 # Sports Lounge TV feed
 
+SportsUpa HD Main sources are collected from exact public event-selection topics and included before ESPN schedule reconciliation. Each run requires the site's current Main HD declaration and decodes only a strict public RockyStream bootstrap into a stable, query-free Main ingest route. Signed media URLs and session credentials are not published. Admin remains excluded until its normal Android TV playback route is verified. Collection is bounded to 18 prioritized events; broker or provider failures can omit SportsUpa sources without changing other providers.
+
 GitHub's scheduled events are best-effort and may be delayed or dropped. A guaranteed five-minute publication cadence requires an independent scheduler to call this workflow's existing `workflow_dispatch` trigger; the cron alone is not a freshness guarantee.
 
 Automatically refreshed TimStreams, PPV.st, Sports Streams, DLStreams, and Pizarra MX game and stream feed for the Android TV app.
