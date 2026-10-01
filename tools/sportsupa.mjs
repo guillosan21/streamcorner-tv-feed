@@ -300,7 +300,7 @@ function kickoffPriority(row, nowMillis) {
 }
 
 function safeEmbedUrl(value) {
-  if (typeof value !== "string") return "";
+  if (typeof value !== "string" || !/^https:\/\/embed\.st\/embed\/admin\/[A-Za-z0-9_-]{1,180}\/[1-9][0-9]{0,2}$/.test(value)) return "";
   let url;
   try {
     url = new URL(value);
@@ -309,21 +309,34 @@ function safeEmbedUrl(value) {
   }
   if (url.protocol !== "https:" || url.hostname.toLowerCase() !== EMBED_HOST ||
       url.username || url.password || url.port || url.search || url.hash) return "";
-  if (!/^\/embed\/admin\/[A-Za-z0-9._~-]+\/\d{1,3}$/.test(url.pathname)) return "";
+  if (!/^\/embed\/admin\/[A-Za-z0-9_-]{1,180}\/[1-9][0-9]{0,2}$/.test(url.pathname)) return "";
   return url.href;
 }
 
+/** Exact HD Admin catalog transport; media and authentication remain runtime-only. */
+export function isSportsUpaAdminSource(source) {
+  return source?.provider === "SportsUpa" && source.embedProvider === "SportsUpa" && source.hd === true &&
+    source.url === "" && typeof source.embedUrl === "string" && !!safeEmbedUrl(source.embedUrl) &&
+    !source.providerSourceRef && !source.clearKey &&
+    Object.keys(source.headers || {}).length === 1 && source.headers.Referer === "https://sportsupa.st/";
+}
+
+export function isSportsUpaHdSource(source) {
+  return isSportsUpaMainSource(source) || isSportsUpaAdminSource(source);
+}
+
 /** Only affirmative HD rows from the public Admin stream catalog are eligible. */
-export function sportsUpaAdminSources(rows, category = "admin") {
+export function sportsUpaAdminSources(rows, category = "admin", expectedId = "") {
   if (String(category).trim().toLowerCase() !== "admin" || !Array.isArray(rows)) return [];
   const seen = new Set();
   return rows.flatMap((row, index) => {
     if (row?.hd !== true) return [];
     const embedUrl = safeEmbedUrl(row.embedUrl ?? row.embed_url ?? row.url);
     if (!embedUrl || seen.has(embedUrl)) return [];
+    if (expectedId && new URL(embedUrl).pathname.split("/")[3] !== expectedId) return [];
     seen.add(embedUrl);
     return [{
-      name: String(row.source_name ?? row.name ?? `Admin HD ${index + 1}`).trim() || `Admin HD ${index + 1}`,
+      name: `SportsUpa • Admin HD ${new URL(embedUrl).pathname.split("/").at(-1)}`,
       url: "",
       embedUrl,
       provider: "SportsUpa",
@@ -362,11 +375,11 @@ export async function collectSportsUpaAdminGames({ fetchImpl = fetch, now = new 
       if (index >= candidates.length) return;
       const { match, source, startsAt, home, away } = candidates[index];
       const id = String(source.id ?? source.eventId ?? source.event_id ?? eventId(match)).trim();
-      if (!id || id.length > 180) continue;
+      if (!/^[A-Za-z0-9_-]{1,180}$/.test(id)) continue;
       try {
         const streamPayload = await getJson(fetchImpl, `${API_BASE}/stream/admin/${encodeURIComponent(id)}`);
         const streams = apiRowsFrom(streamPayload);
-        const playable = sportsUpaAdminSources(streams, "admin");
+        const playable = sportsUpaAdminSources(streams, "admin", id);
         if (!playable.length || !startsAt) continue;
         const label = String(match.title ?? match.name ?? match.event_name ?? "Sports event").trim();
         const gameId = eventId(match) || id;

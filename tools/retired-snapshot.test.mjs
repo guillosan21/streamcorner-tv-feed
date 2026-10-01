@@ -88,6 +88,27 @@ test("retirement classifier preserves a different provider on shared embed host"
   assert.equal(isRetiredSource({ provider: "Streamed", embedUrl: "https://other.example/watch" }), true);
 });
 
+test("retirement exception requires exact public HD SportsUpa Admin provenance", () => {
+  const source = { provider: "SportsUpa", embedProvider: "SportsUpa", hd: true, url: "",
+    name: "SportsUpa • Admin HD 1", embedUrl: "https://embed.st/embed/admin/example/1",
+    headers: { Referer: "https://sportsupa.st/" } };
+  assert.equal(isRetiredSource(source), false);
+  for (const override of [
+    { provider: "Streamed" }, { embedProvider: "Streamed" }, { name: "Streamed • HD 1" },
+    { hd: false }, { hd: null }, { provider: "PPV" },
+    { headers: { Referer: "https://sportsupa.st/", Cookie: "secret" } },
+    { providerSourceRef: "streamed:example" },
+  ]) assert.equal(isRetiredSource({ ...source, ...override }), true);
+  for (const embedUrl of [
+    "https://embed.st/embed/admin/example/100",
+    `https://embed.st/embed/admin/${"a".repeat(129)}/1`,
+    "https://embed.st/embed/admin/example/1000",
+  ]) {
+    assert.equal(isRetiredSource({ ...source, provider: "PPV", embedUrl }), true);
+    assert.equal(isRetiredSource({ ...source, hd: false, embedUrl }), true);
+  }
+});
+
 test("snapshot validator rejects unrelated game, source, score, status, and timestamp edits", () => {
   const { feed, status } = fixture();
   const expected = deriveRetiredSourceSnapshot(feed, status);

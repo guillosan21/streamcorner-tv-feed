@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { fetchTimStreamsGames } from "./timstreams.mjs";
-import { collectSportsUpaMainGames, isSportsUpaMainSource } from "./sportsupa.mjs";
+import { collectSportsUpaMainGames, collectSportsUpaAdminGames, isSportsUpaHdSource } from "./sportsupa.mjs";
 import { fetchPpvGames } from "./ppvstreams.mjs";
 import { fetchDlStreamsGames, findBroadcastChannelGames } from "./dlstreams.mjs";
 import { fetchHighflyGames, attachAddonSources, preferAddonOverPpv } from "./highfly.mjs";
@@ -507,8 +507,8 @@ function sourceProvenanceErrors(rows) {
       if (!String(source.name || "").startsWith(`${provider} • `)) {
         errors.push(`${game.id}: label ${source.name || "<empty>"} disagrees with ${provider || "<empty>"}`);
       }
-      if (provider === "SportsUpa" && !isSportsUpaMainSource(source)) {
-        errors.push(`${game.id}: SportsUpa requires an affirmative HD canonical Main ingest source`);
+      if (provider === "SportsUpa" && !isSportsUpaHdSource(source)) {
+        errors.push(`${game.id}: SportsUpa requires an affirmative HD canonical Main or Admin source`);
       }
       if (provider === "Pizarra MX" && (!isPizarraRef || source.url || source.embedUrl || Object.keys(source.headers || {}).length)) {
         errors.push(`${game.id}: Pizarra MX source must be an exact opaque ref without published transport state`);
@@ -680,7 +680,7 @@ function activeGameAt(game, nowMs) {
 }
 
 async function inspectStreamCapabilities(source, provider = "") {
-  if (source.provider === "SportsUpa") return isSportsUpaMainSource(source) ? source : null;
+  if (source.provider === "SportsUpa") return isSportsUpaHdSource(source) ? source : null;
   if (source.provider === "Pizarra MX" && isValidPizarraMxSourceRef(source.providerSourceRef) &&
       !source.url && !source.embedUrl && !Object.keys(source.headers || {}).length) return source;
   if (!source.url) {
@@ -883,6 +883,16 @@ try {
   } catch {
     catalogCounts.sportsupaMain = 0;
     console.warn("SportsUpa Main catalog unavailable; omitted without changing other providers");
+  }
+
+  console.log("Fetching SportsUpa HD Admin catalog");
+  try {
+    const sportsUpa = await collectSportsUpaAdminGames({ now });
+    catalogCounts.sportsupaAdmin = sportsUpa.length;
+    games.push(...sportsUpa.filter(isSupportedSportsEntry));
+  } catch {
+    catalogCounts.sportsupaAdmin = 0;
+    console.warn("SportsUpa Admin catalog unavailable; omitted without changing other providers");
   }
 
   console.log("Fetching ESPN schedules and scoreboards");

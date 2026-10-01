@@ -12,6 +12,7 @@ import {
   sportsUpaMainWrapperUrl,
   gateSportsUpaDiagnosticGames,
   isSportsUpaMainSource,
+  isSportsUpaAdminSource,
   sportsUpaAdminSources,
   sportsUpaDiagnosticPlaybackEnabled,
 } from "./sportsupa.mjs";
@@ -183,12 +184,22 @@ test("SportsUpa admits only explicitly HD public Admin embed rows", () => {
   assert.equal(sources[0].provider, "SportsUpa");
   assert.equal(sources[0].embedProvider, "SportsUpa");
   assert.equal(sources[0].hd, true);
+  assert.equal(sources[0].name, "SportsUpa • Admin HD 1");
+  assert.equal(isSportsUpaAdminSource(sources[0]), true);
+  for (const bad of [
+    {...sources[0], hd: false}, {...sources[0], hd: null},
+    {...sources[0], embedUrl: "https://embed.st/embed/admin/event/0"},
+    {...sources[0], embedUrl: "https://embed.st/embed/admin/../1"},
+    {...sources[0], embedUrl: "https://embed.st:443/embed/admin/event/1"},
+    {...sources[0], headers: {Referer: "https://sportsupa.st/", Authorization: "secret"}},
+  ]) assert.equal(isSportsUpaAdminSource(bad), false);
   assert.equal(sources[0].headers.Referer, "https://sportsupa.st/");
   assert.deepEqual(sportsUpaAdminSources([hdRow], "main"), []);
   assert.deepEqual(sportsUpaAdminSources([hdRow], "delta"), []);
+  assert.deepEqual(sportsUpaAdminSources([hdRow], "admin", "different-event"), []);
 });
 
-test("normal feed publication is fail-closed and diagnostics require literal true", () => {
+test("explicit diagnostics remain separately gated by literal true", () => {
   const candidate = [{ id: "sportsupa-event", status: "upcoming" }];
 
   assert.equal(sportsUpaDiagnosticPlaybackEnabled(undefined), false);
@@ -219,7 +230,9 @@ test("public Admin collector excludes other categories and never labels rows liv
       };
     }
     assert.match(url, /\/stream\/admin\/admin-one$/);
-    return { ok: true, text: async () => JSON.stringify([hdRow, { ...hdRow, hd: false }]) };
+    const boundRow = { ...hdRow, embedUrl: "https://embed.st/embed/admin/admin-one/1" };
+    return { ok: true, text: async () => JSON.stringify([boundRow, { ...boundRow, hd: false },
+      { ...hdRow, embedUrl: "https://embed.st/embed/admin/unrelated-event/1" }]) };
   };
 
   const games = await collectSportsUpaAdminGames({ fetchImpl, now: new Date("2026-09-29T00:00:00Z") });

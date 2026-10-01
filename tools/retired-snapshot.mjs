@@ -1,15 +1,18 @@
 import { isDeepStrictEqual } from "node:util";
+import { isSportsUpaAdminSource } from "./sportsupa.mjs";
 
 export function isRetiredSource(source) {
   const labels = [source?.provider, source?.embedProvider, String(source?.name || "").split("•", 1)[0]];
   if (labels.some((label) => String(label || "").trim().toLowerCase() === "streamed")) return true;
   if (String(source?.providerSourceRef || "").toLowerCase().startsWith("streamed:")) return true;
+  if (isSportsUpaAdminSource(source)) return false;
   return [source?.url, source?.embedUrl].some((value) => {
     try {
       const parsed = new URL(String(value || ""));
       return parsed.hostname.toLowerCase() === "embed.st" &&
         !parsed.pathname.toLowerCase().startsWith("/embed/ingest/") &&
-        /^\/embed\/[a-z0-9_-]{1,64}\/[a-z0-9_-]{1,128}\/[0-9]{1,2}\/?$/i.test(parsed.pathname);
+        (parsed.pathname.toLowerCase().startsWith("/embed/admin/") ||
+         /^\/embed\/[a-z0-9_-]{1,64}\/[a-z0-9_-]{1,128}\/[0-9]{1,2}\/?$/i.test(parsed.pathname));
     } catch {
       return false;
     }
