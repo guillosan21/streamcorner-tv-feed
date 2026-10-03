@@ -7,7 +7,7 @@ import { collectSportsUpaMainGames, collectSportsUpaAdminGames, isSportsUpaHdSou
 import { fetchPpvGames } from "./ppvstreams.mjs";
 import { fetchDlStreamsGames, findBroadcastChannelGames } from "./dlstreams.mjs";
 import { fetchHighflyGames, attachAddonSources, preferAddonOverPpv } from "./highfly.mjs";
-import { feedSourceKey, isValidPizarraMxSourceRef } from "./playback-identity.mjs";
+import { feedSourceKey, isValidPizarraMxSourceRef, isOpaqueTimStreamsSource } from "./playback-identity.mjs";
 import { loadTrustedFeedBaseline } from "./feed-baseline.mjs";
 import { compareFeedSourceCoverage } from "./feed-safety.mjs";
 import { assertSufficientEspnScheduleCoverage, espnLiveScheduleDates, espnScheduleDates, fetchEspnSchedules } from "./espn-schedules.mjs";
@@ -488,7 +488,7 @@ function inferredWebProvider(embedUrl) {
   return "";
 }
 
-function sourceProvenanceErrors(rows) {
+export function sourceProvenanceErrors(rows) {
   const errors = [];
   for (const game of rows) {
     for (const source of game.sources || []) {
@@ -512,6 +512,9 @@ function sourceProvenanceErrors(rows) {
       }
       if (provider === "Pizarra MX" && (!isPizarraRef || source.url || source.embedUrl || Object.keys(source.headers || {}).length)) {
         errors.push(`${game.id}: Pizarra MX source must be an exact opaque ref without published transport state`);
+      }
+      if (provider === "TimStreams" && rawProviderRef && !isOpaqueTimStreamsSource(source)) {
+        errors.push(`${game.id}: TimStreams source must be an exact catalog ref without published transport state`);
       }
       if (inferred && embedProvider !== inferred) {
         errors.push(`${game.id}: ${source.embedUrl} has embedProvider=${embedProvider || "<empty>"}, expected ${inferred}`);
@@ -679,7 +682,8 @@ function activeGameAt(game, nowMs) {
   return game?.status === "live" && Number.isFinite(endsAt) && endsAt > nowMs;
 }
 
-async function inspectStreamCapabilities(source, provider = "") {
+export async function inspectStreamCapabilities(source, provider = "") {
+  if (source.provider === "TimStreams" && source.providerSourceRef) return isOpaqueTimStreamsSource(source) ? source : null;
   if (source.provider === "SportsUpa") return isSportsUpaHdSource(source) ? source : null;
   if (source.provider === "Pizarra MX" && isValidPizarraMxSourceRef(source.providerSourceRef) &&
       !source.url && !source.embedUrl && !Object.keys(source.headers || {}).length) return source;

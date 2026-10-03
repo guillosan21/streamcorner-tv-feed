@@ -12,4 +12,4 @@ The scheduled GitHub Actions job requests a rebuild and deployment of `games.jso
 
 Schema version 2 marks generated events as deduplicated and final-event filtered. Compatible app versions can trust those guarantees and display the cached catalog immediately instead of repeating expensive reconciliation on low-power TV hardware.
 
-TimStreams catalog reads retry transient `events: null` rotation responses across both `timstreams.st` and `timst.cfd`. PPV mirrors rediscovered through another catalog are collapsed into PPV's single canonical event player.
+TimStreams catalog reads prefer `timst.top` and retain exact-origin `timst.cfd` and `timstreams.st` fallbacks for rotation. Live sources are verified before publication and retain only stable event/player references, never signed media URLs or session headers. Approved-player redirects must stay on the same host and match the app's event-bound UNL, NFL or MLB routes. PPV mirrors rediscovered through another catalog are collapsed into PPV's single canonical event player.

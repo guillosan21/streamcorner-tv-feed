@@ -1,7 +1,66 @@
-const TIMSTREAMS_API = "https://timstreams.st/api";
-const TIMSTREAMS_SITE = "https://timstreams.st/";
-const TIMSTREAMS_API_ORIGINS = ["https://timstreams.st", "https://timst.cfd"];
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
+
+const TIMSTREAMS_API = "https://timst.top/api";
+const TIMSTREAMS_SITE = "https://timst.top/";
+const TIMSTREAMS_API_ORIGINS = ["https://timst.top", "https://timst.cfd", "https://timstreams.st"];
+const TIMSTREAMS_PLAYER_HOSTS = new Set(["exmxbxe.cfd", "epiembeds.online"]);
 const TIMSTREAMS_TIME_ZONE = "America/New_York";
+
+function safeTimPlayerUrl(value) {
+  const raw = String(value || "").trim();
+  const rawMatch = raw.match(/^https:\/\/([^/?#]+)(\/[^?#]*)?(?:\?[^#]*)?$/i);
+  if (!rawMatch) return "";
+  try {
+    const url = new URL(raw);
+    const host = url.hostname.toLowerCase();
+    const path = rawMatch[2] || "/";
+    if (url.protocol !== "https:" || url.username || url.password || url.port || url.hash ||
+        rawMatch[1].toLowerCase() !== host || url.host.toLowerCase() !== host || url.pathname !== path ||
+        !TIMSTREAMS_PLAYER_HOSTS.has(host) ||
+        !/^\/[A-Za-z0-9][A-Za-z0-9._~-]{0,180}$/.test(path) || path.includes("..") ||
+        (url.search && url.search.length > 2048)) return "";
+    return url.href;
+  } catch {
+    return "";
+  }
+}
+
+function encodeTimRefPart(value) {
+  return Buffer.from(value, "utf8").toString("base64url");
+}
+
+function isPublicAddress(address) {
+  const family = isIP(address);
+  if (family === 4) {
+    const [first, second, third] = address.split(".").map(Number);
+    return !(first === 0 || first === 10 || first === 127 || first >= 224 ||
+      (first === 169 && second === 254) || (first === 172 && second >= 16 && second <= 31) ||
+      (first === 192 && second === 168) || (first === 100 && second >= 64 && second <= 127) ||
+      (first === 192 && second === 0 && third === 0) ||
+      (first === 198 && (second === 18 || second === 19 || (second === 51 && third === 100))) ||
+      (first === 203 && second === 0 && third === 113));
+  }
+  if (family === 6) {
+    const value = address.toLowerCase();
+    return !(value === "::" || value === "::1" || value.startsWith("fc") || value.startsWith("fd") ||
+      /^fe[89ab]/.test(value) || value.startsWith("ff") || value.startsWith("2001:db8:") ||
+      value.startsWith("::ffff:"));
+  }
+  return false;
+}
+
+async function requirePublicHttpsUrl(value) {
+  const url = safeManifestUrl(value);
+  if (!url) throw new Error("unsafe TimStreams manifest URL");
+  const hostname = new URL(url).hostname;
+  if (isIP(hostname.replace(/^\[|\]$/g, ""))) throw new Error("TimStreams manifest IP literal is not allowed");
+  const addresses = await lookup(hostname, { all: true, verbatim: true });
+  if (!addresses.length || addresses.some(({ address }) => !isPublicAddress(address))) {
+    throw new Error("TimStreams manifest host did not resolve publicly");
+  }
+  return url;
+}
 
 function parseWallClock(value, timeZone = TIMSTREAMS_TIME_ZONE) {
   const raw = String(value || "").trim();
@@ -29,20 +88,161 @@ function parseWallClock(value, timeZone = TIMSTREAMS_TIME_ZONE) {
   return Number.isFinite(result.getTime()) ? result : null;
 }
 
-function findHlsUrl(text) {
+function findManifestUrl(text) {
   const normalized = String(text || "").replaceAll("\\/", "/");
-  const match = normalized.match(/https:\/\/[^\s"'<>]+\.m3u8(?:\?[^\s"'<>]*)?/i);
+  const match = normalized.match(/https:\/\/[^\s"'<>]+\.(?:m3u8|mpd)(?:\?[^\s"'<>]*)?/i);
   if (!match) return "";
+  return safeManifestUrl(match[0]);
+}
+
+function safeManifestUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw || /[\s\u0000-\u001f]/.test(raw)) return "";
   try {
-    const url = new URL(match[0]);
-    return url.protocol === "https:" ? url.href : "";
+    const url = new URL(raw);
+    const authority = raw.match(/^https:\/\/([^/?#]+)/i)?.[1];
+    if (url.protocol !== "https:" || !url.hostname || url.username || url.password || url.hash ||
+        url.port || authority?.toLowerCase() !== url.host.toLowerCase() ||
+        url.host.toLowerCase() !== url.hostname.toLowerCase()) return "";
+    return url.href;
   } catch {
     return "";
   }
 }
 
+function isRedirect(response) {
+  return [301, 302, 303, 307, 308].includes(response.status);
+}
+
+const TIMSTREAMS_NFL_PLAY_TEAMS = new Set([
+  "49ers", "bears", "bengals", "bills", "broncos", "browns", "buccaneers", "cardinals",
+  "chargers", "chiefs", "colts", "commanders", "cowboys", "dolphins", "eagles", "falcons",
+  "giants", "jaguars", "jets", "lions", "packers", "panthers", "patriots", "raiders", "rams",
+  "ravens", "saints", "seahawks", "steelers", "texans", "titans", "vikings",
+]);
+const TIMSTREAMS_MLB_PLAY_TEAMS = new Set([
+  "athletics", "angels", "astros", "blue-jays", "braves", "brewers", "cardinals", "cubs",
+  "diamondbacks", "dodgers", "giants", "guardians", "mariners", "marlins", "mets", "nationals",
+  "orioles", "padres", "phillies", "pirates", "rangers", "rays", "red-sox", "reds", "rockies",
+  "royals", "tigers", "twins", "white-sox", "yankees",
+]);
+
+// Mirrors the Android bridge's catalog-event-bound redirect contract.
+function isEventBoundTimPlayPath(path, eventSlug) {
+  const slug = String(eventSlug || "");
+  const nfl = slug.match(/^([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)-v-([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)-(\d{1,12})$/i);
+  if (nfl && TIMSTREAMS_NFL_PLAY_TEAMS.has(nfl[1].toLowerCase()) &&
+      TIMSTREAMS_NFL_PLAY_TEAMS.has(nfl[2].toLowerCase()) && nfl[1].toLowerCase() !== nfl[2].toLowerCase() &&
+      new RegExp(`^/play/[A-Za-z0-9._~-]{1,512}\\.nfl-${nfl[3]}$`, "i").test(path)) return true;
+  const unlId = slug.match(/(?:^|-)unl-(\d{1,12})$/i)?.[1];
+  if (unlId && new RegExp(`^/play/[A-Za-z0-9._~-]{1,512}\\.unl-${unlId}$`, "i").test(path)) return true;
+  const team = path.match(/^\/play\/[A-Za-z0-9._~-]{1,512}\.mlb-([a-z0-9-]+)$/i)?.[1]?.toLowerCase();
+  return Boolean(team && TIMSTREAMS_MLB_PLAY_TEAMS.has(team) &&
+    new RegExp(`(?:^|-)${team}(?:-|$)`, "i").test(slug));
+}
+
+function safeTimPlayerResponseUrl(value, expectedUrl, eventSlug) {
+  const original = safeTimPlayerUrl(expectedUrl);
+  if (!original) return "";
+  const raw = String(value || "").trim();
+  const match = raw.match(/^https:\/\/([^/?#]+)(\/[^?#]*)?(?:\?[^#]*)?$/i);
+  if (!match) return "";
+  try {
+    const expected = new URL(original);
+    const actual = new URL(raw);
+    const path = match[2] || "/";
+    if (actual.protocol !== "https:" || actual.username || actual.password || actual.port || actual.hash ||
+        match[1].toLowerCase() !== expected.hostname || actual.hostname !== expected.hostname ||
+        actual.pathname !== path || path.includes("..") || actual.search.length > 2048) return "";
+    const exactEventRedirect = isEventBoundTimPlayPath(path, eventSlug);
+    return path === expected.pathname || exactEventRedirect ? actual.href : "";
+  } catch { return ""; }
+}
+
+async function fetchTimPlayerPage(value, headers, eventSlug) {
+  const firstUrl = safeTimPlayerUrl(value);
+  if (!firstUrl) return null;
+  const expected = new URL(firstUrl);
+  let current = firstUrl;
+  for (let hop = 0; hop <= 4; hop += 1) {
+    await requirePublicHttpsUrl(current);
+    const response = await fetch(current, {
+      headers,
+      redirect: "manual",
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!isRedirect(response)) {
+      const finalUrl = safeTimPlayerResponseUrl(response.url || current, firstUrl, eventSlug);
+      if (!finalUrl) return null;
+      const final = new URL(finalUrl);
+      if (final.hostname !== expected.hostname) return null;
+      return response;
+    }
+    await response.body?.cancel().catch(() => {});
+    if (hop === 4) return null;
+    const location = response.headers.get("location");
+    if (!location) return null;
+    const nextUrl = safeTimPlayerResponseUrl(new URL(location, current).href, firstUrl, eventSlug);
+    if (!nextUrl) return null;
+    const next = new URL(nextUrl);
+    if (next.hostname !== expected.hostname) return null;
+    current = nextUrl;
+  }
+  return null;
+}
+
+async function fetchTimManifest(value, headers) {
+  let current = safeManifestUrl(value);
+  if (!current) return null;
+  for (let hop = 0; hop <= 4; hop += 1) {
+    current = await requirePublicHttpsUrl(current);
+    const response = await fetch(current, {
+      headers,
+      redirect: "manual",
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!isRedirect(response)) {
+      const finalUrl = await requirePublicHttpsUrl(response.url || current);
+      return { response, url: finalUrl };
+    }
+    await response.body?.cancel().catch(() => {});
+    if (hop === 4) return null;
+    const location = response.headers.get("location");
+    if (!location) return null;
+    current = safeManifestUrl(new URL(location, current).href);
+    if (!current) return null;
+  }
+  return null;
+}
+
+async function fetchTimCatalog(origin, attempt) {
+  const initial = new URL("/api/live-upcoming", `${origin}/`);
+  initial.searchParams.set("updated", `${Date.now()}-${attempt}`);
+  let current = initial.href;
+  const expectedOrigin = new URL(origin).origin;
+  for (let hop = 0; hop <= 4; hop += 1) {
+    await requirePublicHttpsUrl(current);
+    const response = await fetch(current, {
+      headers: { Accept: "application/json", Referer: `${origin}/streams`, "User-Agent": "Mozilla/5.0 (compatible; StreamCorner-TV-Feed/1.23)" },
+      redirect: "manual",
+      signal: AbortSignal.timeout(20_000),
+    });
+    const finalUrl = new URL(response.url || current);
+    if (finalUrl.origin !== expectedOrigin || finalUrl.pathname !== "/api/live-upcoming") return null;
+    if (!isRedirect(response)) return response;
+    await response.body?.cancel().catch(() => {});
+    if (hop === 4) return null;
+    const location = response.headers.get("location");
+    if (!location) return null;
+    const next = new URL(location, current);
+    if (next.origin !== expectedOrigin || next.pathname !== "/api/live-upcoming") return null;
+    current = next.href;
+  }
+  return null;
+}
+
 function decodeEmbedPayload(html) {
-  const direct = findHlsUrl(html);
+  const direct = findManifestUrl(html);
   if (direct) return direct;
   const arrayMatch = String(html).match(/(_[a-z0-9]{3})\s*=\s*\[([0-9,]{100,})\]/i);
   if (!arrayMatch) return "";
@@ -53,7 +253,7 @@ function decodeEmbedPayload(html) {
   const subtraction = Number(constants[2]);
   const decoded = arrayMatch[2].split(",").map((value) =>
     String.fromCharCode(((Number(value) ^ xorValue) - subtraction + 256) % 256)).join("");
-  return findHlsUrl(decoded);
+  return findManifestUrl(decoded);
 }
 
 function safeWatchUrl(event) {
@@ -61,46 +261,85 @@ function safeWatchUrl(event) {
   if (!slug || /(?:^|\/)\.\.(?:\/|$)/.test(slug)) return "";
   try {
     const url = new URL(`/watch/${slug}`, TIMSTREAMS_SITE);
-    return url.protocol === "https:" && url.host === "timstreams.st" ? url.href : "";
+    return url.protocol === "https:" && url.origin === new URL(TIMSTREAMS_SITE).origin ? url.href : "";
   } catch {
     return "";
   }
 }
 
 async function resolveStream(stream, event, verifyLive) {
-  const embedUrl = String(stream?.url || "").trim();
+  const embedUrl = safeTimPlayerUrl(stream?.url);
   const watchUrl = safeWatchUrl(event);
-  if (!embedUrl.startsWith("https://") || !watchUrl || stream?.vip === true) return null;
+  if (!embedUrl || !watchUrl || event?.vip === true || stream?.vip === true) return null;
+  let manifestUrl = "";
+  let manifestHeaders = { Referer: TIMSTREAMS_SITE };
   if (verifyLive) {
     try {
-      const response = await fetch(embedUrl, {
-        headers: { Accept: "text/html", Referer: TIMSTREAMS_SITE, "User-Agent": "StreamCorner-TV-Feed/1.13" },
-        redirect: "follow", signal: AbortSignal.timeout(15_000),
-      });
-      if (!response.ok) return null;
-      const manifestUrl = decodeEmbedPayload(await response.text());
+      const response = await fetchTimPlayerPage(embedUrl, {
+        Accept: "text/html", Referer: TIMSTREAMS_SITE, "User-Agent": "StreamCorner-TV-Feed/1.13",
+      }, event?.url);
+      if (!response?.ok) return null;
+      manifestUrl = decodeEmbedPayload(await response.text());
       if (!manifestUrl) return null;
       const referer = `${new URL(response.url || embedUrl).origin}/`;
-      const manifestResponse = await fetch(manifestUrl, {
-        headers: { Accept: "application/vnd.apple.mpegurl,application/x-mpegURL,*/*", Referer: referer, Origin: new URL(referer).origin },
-        redirect: "follow", signal: AbortSignal.timeout(12_000),
+      manifestHeaders = { Referer: referer, Origin: new URL(referer).origin };
+      const manifestFetch = await fetchTimManifest(manifestUrl, {
+        Accept: "application/vnd.apple.mpegurl,application/x-mpegURL,application/dash+xml,*/*", ...manifestHeaders,
       });
-      if (!manifestResponse.ok || !(await manifestResponse.text()).trimStart().startsWith("#EXTM3U")) return null;
+      const manifestBody = await manifestFetch?.response.text();
+      if (!manifestFetch?.response.ok || (!manifestBody?.trimStart().startsWith("#EXTM3U") && !/<MPD\b/i.test(manifestBody || ""))) return null;
+      manifestUrl = manifestFetch.url;
     } catch {
       return null;
     }
+  }
+  return buildResolvedSource(stream, event, embedUrl, manifestUrl, manifestHeaders);
+}
+
+function buildResolvedSource(stream, event, embedUrl, manifestUrl = "", manifestHeaders = { Referer: TIMSTREAMS_SITE }) {
+  const providerSourceRef = timProviderSourceRef(event, embedUrl);
+  // Known catalog players must never fall back to publishing a signed transport when their
+  // stable event identity is malformed or too long for the app's opaque-ref contract.
+  if (!providerSourceRef && safeTimPlayerUrl(embedUrl)) return null;
+  if (providerSourceRef) {
+    // The live manifest, page URL and any signed query are intentionally transient resolver
+    // state.  The public feed carries only a stable provider-owned opaque ref.
+    return {
+      provider: "TimStreams",
+      embedProvider: "TimStreams",
+      name: `TimStreams • ${String(stream?.name || "Live feed").trim()}`,
+      url: "",
+      clearKey: "",
+      embedUrl: "",
+      headers: {},
+      providerSourceRef,
+      providerGeneration: "v2",
+    };
   }
   return {
     provider: "TimStreams",
     embedProvider: "TimStreams",
     name: `TimStreams • ${String(stream?.name || "Live feed").trim()}`,
-    url: "",
+    // Keep the manifest that was actually verified. It avoids forcing the Android client to
+    // boot a provider page for every TimStreams source. The embed URL remains as a short-lived
+    // refresh path when a signed manifest expires during playback.
+    url: manifestUrl,
     clearKey: "",
     // Keep each channel's provider player URL. Reusing the event watch URL for
     // every channel caused source deduplication to collapse an entire list to one.
     embedUrl,
-    headers: { Referer: TIMSTREAMS_SITE },
+    headers: manifestUrl ? manifestHeaders : { Referer: TIMSTREAMS_SITE },
   };
+}
+
+function timProviderSourceRef(event, playerUrl) {
+  const eventSlug = String(event?.url || "").trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._~-]{0,180}$/.test(eventSlug) || eventSlug.includes("..")) return "";
+  const canonicalPlayer = safeTimPlayerUrl(playerUrl);
+  if (!canonicalPlayer) return "";
+  const player = new URL(canonicalPlayer);
+  const id = `v2~${encodeTimRefPart(eventSlug)}~${encodeTimRefPart(player.hostname)}~${encodeTimRefPart(player.pathname)}`;
+  return id.length <= 180 ? `timstreams:${id}` : "";
 }
 
 function eventTeams(title) {
@@ -115,7 +354,8 @@ function eventTeams(title) {
 function canonicalLeague(rawLeague, sport, title) {
   const value = String(rawLeague || "").trim();
   const searchable = `${value} ${sport} ${title}`.toLowerCase();
-  if (/major baseball league|\bmlb\b/.test(searchable)) return "MLB";
+  if (/^major league baseball$/i.test(value) || /major baseball league|\bmlb\b/.test(searchable)) return "MLB";
+  if (/^UEFA Nations Leauge$/i.test(value)) return "UEFA Nations League";
   if (/national football league|\bnfl\b/.test(searchable)) return "NFL";
   if (/women'?s national basketball|\bwnba\b/.test(searchable)) return "WNBA";
   if (/national basketball|\bnba\b/.test(searchable)) return "NBA";
@@ -129,26 +369,19 @@ export async function fetchTimStreamsGames(now, estimatedDurationSeconds) {
     let payload = null;
     let apiUrl = `${TIMSTREAMS_API}/live-upcoming`;
     const errors = [];
-    // The catalog backend briefly emits {events:null} while rotating schedules.
-    // Retry both owner-published domains instead of publishing an empty feed.
-    for (let attempt = 0; attempt < 4 && !Array.isArray(payload?.events); attempt += 1) {
+    for (let attempt = 0; attempt < TIMSTREAMS_API_ORIGINS.length + 1 && !Array.isArray(payload?.events); attempt += 1) {
       const origin = TIMSTREAMS_API_ORIGINS[attempt % TIMSTREAMS_API_ORIGINS.length];
       apiUrl = `${origin}/api/live-upcoming`;
       try {
-        const response = await fetch(`${apiUrl}?updated=${Date.now()}-${attempt}`, {
-          headers: {
-            Accept: "application/json", Referer: `${origin}/streams`,
-            "User-Agent": "Mozilla/5.0 (compatible; StreamCorner-TV-Feed/1.23)",
-          },
-          signal: AbortSignal.timeout(20_000),
-        });
+        const response = await fetchTimCatalog(origin, attempt);
+        if (!response) throw new Error("catalog redirect or final URL was rejected");
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         payload = await response.json();
         if (!Array.isArray(payload?.events)) throw new Error("catalog is rotating (events is not an array)");
       } catch (error) {
         errors.push(`${origin}: ${String(error)}`);
         payload = null;
-        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 750 * (attempt + 1)));
+        if (attempt < TIMSTREAMS_API_ORIGINS.length) await new Promise((resolve) => setTimeout(resolve, 750 * (attempt + 1)));
       }
     }
     if (!Array.isArray(payload?.events)) throw new Error(errors.join("; ") || "catalog did not return events");
@@ -210,4 +443,8 @@ export async function fetchTimStreamsGames(now, estimatedDurationSeconds) {
   }
 }
 
-export const __testing = { parseWallClock, decodeEmbedPayload, safeWatchUrl };
+export const __testing = {
+  parseWallClock, decodeEmbedPayload, safeWatchUrl, safeTimPlayerUrl, canonicalLeague,
+  buildResolvedSource, timProviderSourceRef,
+  fetchTimCatalog, resolveStream, safeTimPlayerResponseUrl, apiOrigins: TIMSTREAMS_API_ORIGINS,
+};
