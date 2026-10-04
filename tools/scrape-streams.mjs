@@ -60,6 +60,8 @@ function estimatedDurationSeconds(title, league, sport) {
 }
 
 function canonicalTeam(value) {
+  // Explicit national-team spellings, including Pizarra's Spanish abbreviation.
+  if (/^(?:ee\.?\s*uu\.?|usa|u\.?s\.?a\.?|united states|estados unidos)$/i.test(String(value || "").trim())) return "united states";
   return String(value || "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()
     .replace(/\bchiacgo\b/g, "chicago")
     .replace(/\bman city\b/g, "manchester city")
@@ -429,6 +431,42 @@ export function attachScheduleGames(sourceGames, scheduleGames, now = new Date()
     }
   }
   return deduplicateFeedGames(games.filter((game) => game.scheduleState !== "post"));
+}
+
+/** Attach timed manual listings only to a unique, corroborated provider fixture. */
+export function attachTimedPizarraManualGames(games) {
+  const isManual = (game) => game?.provider === "pizarramx" &&
+    String(game.id || "").startsWith("pizarramx-manual-");
+  const compatible = (manual, candidate) => {
+    // An ESPN-bound manual row already has authoritative fixture identity/status.
+    // Do not replace it with a provider-only (or differently bound) anchor.
+    if (manual.scoreboardEventId && manual.scoreboardEventId !== candidate.scoreboardEventId) return false;
+    if (candidate.provider === "pizarramx" || candidate.is24x7 || candidate.scheduleState === "post" ||
+        hasExplicitDoubleheaderMarker(manual) || hasExplicitDoubleheaderMarker(candidate)) return false;
+    const start = Date.parse(manual.startsAt || "");
+    const otherStart = Date.parse(candidate.startsAt || "");
+    if (!Number.isFinite(start) || !Number.isFinite(otherStart) || Math.abs(start - otherStart) > 45 * 60 * 1000) return false;
+    const sport = scheduleSportKey(manual);
+    if (!sport || sport !== scheduleSportKey(candidate)) return false;
+    const league = scheduleLeagueKey(manual);
+    const otherLeague = scheduleLeagueKey(candidate);
+    const genericSoccer = new Set(["soccer", "football", "friendly match", "amistoso", "amistoso internacional"]);
+    if (league !== otherLeague && !(sport === "soccer" && genericSoccer.has(league) && genericSoccer.has(otherLeague))) return false;
+    const left = eventSides(manual).sort();
+    const right = eventSides(candidate).sort();
+    return left.length === 2 && right.length === 2 && left.every((side, index) => side && side === right[index]);
+  };
+  const attachments = new Map();
+  for (const manual of games.filter(isManual)) {
+    const candidates = games.filter((candidate) => compatible(manual, candidate));
+    // Multiple cards or multiple manual declarations require stronger identity evidence.
+    if (candidates.length !== 1 || games.filter((row) => isManual(row) && compatible(row, candidates[0])).length !== 1) continue;
+    attachments.set(manual, candidates[0]);
+  }
+  for (const [manual, candidate] of attachments) {
+    candidate.sources = deduplicateFeedSources(candidate.sources, manual.sources);
+  }
+  return games.filter((game) => !attachments.has(game));
 }
 
 export function attachTimeLimitedDlStreamsSources(games, now = new Date()) {
@@ -905,6 +943,7 @@ try {
   const scheduledGames = [...new Map([...schedule.games, ...schedule.completed]
     .map((game) => [String(game.scoreboardEventId || game.id), game])).values()];
   games = attachScheduleGames(games, scheduledGames, now);
+  games = attachTimedPizarraManualGames(games);
   console.log("Fetching Sports Streams catalog");
   const highfly = await fetchHighflyGames(now);
   catalogCounts.highfly = highfly.catalogCount;

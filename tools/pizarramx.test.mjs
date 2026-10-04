@@ -103,7 +103,7 @@ test("Pizarra event and manual mapping emits URL-free refs with schedule and ava
   const manualGame = games.find((game) => game.id.startsWith("pizarramx-manual-"));
   assert.equal(manualGame.status, "upcoming");
   assert.equal(manualGame.scheduleState, "pre");
-  assert.equal(manualGame.startsAt, "");
+  assert.equal(manualGame.startsAt, "2026-09-26T20:30:00.000Z");
   assert.equal(manualGame.is24x7, false);
   assert.equal(manualGame.sources.length, 1);
   assert.equal(manualGame.sources.every((source) => source.availableBeforeKickoff === true), true);

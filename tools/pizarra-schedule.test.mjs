@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   attachScheduleGames,
+  attachTimedPizarraManualGames,
   attachTimeLimitedDlStreamsSources,
   deduplicateFeedGames,
   deduplicateFeedSources,
@@ -11,6 +12,75 @@ import {
   sameFeedEvent,
 } from "./scrape-streams.mjs";
 import { parsePizarraMxCatalog } from "./pizarramx.mjs";
+
+function manualMexicoUsa(overrides = {}) {
+  return {
+    id: "pizarramx-manual-mexico-usa", provider: "pizarramx", title: "EE.UU vs MEXICO",
+    homeTeam: "EE.UU", awayTeam: "MEXICO", league: "FRIENDLY MATCH", sport: "Soccer",
+    startsAt: "2026-10-04T02:00:00.000Z", status: "upcoming", scheduleState: "pre",
+    sources: [
+      { ...pizarraSource(), name: "Pizarra MX • AZTECA 7", providerSourceRef: `pizarramx:v1~m~${"a".repeat(64)}~${"b".repeat(64)}` },
+      { ...pizarraSource(), name: "Pizarra MX • TUDN HD", providerSourceRef: `pizarramx:v1~m~${"a".repeat(64)}~${"c".repeat(64)}` },
+    ], ...overrides,
+  };
+}
+
+function timMexicoUsa(overrides = {}) {
+  return {
+    id: "timstreams-usa-vs-mexico", provider: "timstreams", title: "Mexico @ USA",
+    homeTeam: "USA", awayTeam: "Mexico", league: "Soccer", sport: "Soccer",
+    startsAt: "2026-10-04T02:00:00.000Z", status: "upcoming", scheduleState: "pre",
+    sources: [{ name: "TimStreams • TNT", provider: "TimStreams", url: "https://cdn.example/tnt.m3u8" }],
+    ...overrides,
+  };
+}
+
+test("timed manual national-team listing joins a unique provider fixture without marking pregame live", () => {
+  const data = { partidos: [], detalles: {} };
+  const parsed = parsePizarraMxCatalog(data, [{
+    activo: true, competicion: "FRIENDLY MATCH", local: "EE.UU", visitante: "MEXICO",
+    kickoff: "2026-10-04T02:00:00Z", opciones: [
+      { fuente: "AZTECA 7", embed: "https://la18hd.su/vivo/canales.php?stream=azteca7" },
+      { fuente: "TUDN HD", embed: "https://exmxbxe.cfd/tudn-hd" },
+      { fuente: "AZTECA duplicate", embed: "https://la18hd.su/vivo/canales.php?stream=azteca7" },
+    ],
+  }], new Date("2026-10-04T00:00:00Z"));
+  const result = attachTimedPizarraManualGames([...parsed, timMexicoUsa()]);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].id, "timstreams-usa-vs-mexico");
+  assert.equal(result[0].startsAt, "2026-10-04T02:00:00.000Z");
+  assert.equal(result[0].status, "upcoming");
+  assert.equal(result[0].scheduleState, "pre");
+  assert.equal(result[0].sources.length, 3);
+  assert.equal(result[0].sources.filter((source) => source.provider === "Pizarra MX").length, 2);
+  assert.equal(attachTimedPizarraManualGames(result).length, 1);
+});
+
+test("manual fixture join rejects absent time, rematches, different sports/leagues and ambiguous cards", () => {
+  for (const override of [
+    { startsAt: "" }, { startsAt: "2026-10-05T02:00:00Z" },
+    { sport: "Basketball" }, { league: "NCAA Soccer" },
+    { homeTeam: "USA College" }, { title: "EE.UU vs Mexico Game 2" },
+  ]) {
+    assert.equal(attachTimedPizarraManualGames([manualMexicoUsa(override), timMexicoUsa()]).length, 2);
+  }
+  assert.equal(attachTimedPizarraManualGames([
+    manualMexicoUsa(), timMexicoUsa(), timMexicoUsa({ id: "different-match" }),
+  ]).length, 3);
+  assert.equal(attachTimedPizarraManualGames([
+    manualMexicoUsa(), manualMexicoUsa({ id: "pizarramx-manual-second" }), timMexicoUsa(),
+  ]).length, 3);
+});
+
+test("manual fixture join preserves an authoritative identity over an unbound or conflicting provider card", () => {
+  const manual = manualMexicoUsa({ scoreboardEventId: "espn-mex-usa", scheduleState: "in", status: "live" });
+  for (const scoreboardEventId of [undefined, "espn-other-event"]) {
+    const result = attachTimedPizarraManualGames([manual, timMexicoUsa({ scoreboardEventId })]);
+    assert.equal(result.length, 2);
+    assert.equal(result[0].scheduleState, "in");
+    assert.equal(result[0].scoreboardEventId, "espn-mex-usa");
+  }
+});
 
 function pizarraSource(availableBeforeKickoff = true) {
   return {

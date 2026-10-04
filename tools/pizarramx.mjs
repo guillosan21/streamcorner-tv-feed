@@ -299,8 +299,9 @@ function manualGame(row) {
     title: `${homeTeam} vs ${awayTeam}`,
     league,
     sport: pizarraSport(league),
-    // Manual transmissions have no stable provider event ID or reliable kickoff.
-    startsAt: "",
+    // A full timestamp is usable; date-only/display-clock values remain untimed.
+    // Availability never establishes that the match has actually started.
+    startsAt: parseStartsAt(declaredKickoff),
     endsAt: "",
     status: "upcoming",
     scheduleState: "pre",
