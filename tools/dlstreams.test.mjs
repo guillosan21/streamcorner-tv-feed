@@ -67,6 +67,15 @@ test("accepts the verified daddylive player host and exact premiumtv path", () =
   );
 });
 
+test("accepts exact current dembed player without broadening its route or channel", () => {
+  const route = "https://dembed.st/premiumtv/daddy.php?id=44";
+  assert.equal(__testing.parsePlayerTemplate(`<iframe src="${route}"></iframe>`, "44"), route.replace("44", "__CHANNEL_ID__"));
+  for (const invalid of [route.replace("dembed.st", "cdn.dembed.st"), route.replace("dembed.st", "dembed.st.evil.test"), route.replace("daddy.php", "other.php"), route + "&ad=1"]) {
+    assert.equal(__testing.parsePlayerTemplate(`<iframe src="${invalid}"></iframe>`, "44"), "");
+  }
+  assert.equal(__testing.parsePlayerTemplate(`<iframe src="${route}"></iframe>`, "45"), "");
+});
+
 test("rejects unverified player hosts, paths, and query parameters", () => {
   for (const url of [
     "https://daddyliveplayer.st.evil.example/premiumtv/daddy.php?id=44",

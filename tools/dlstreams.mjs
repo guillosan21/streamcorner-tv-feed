@@ -165,7 +165,7 @@ function parsePlayerTemplate(html, expectedId) {
   for (const rawUrl of iframeUrls) {
     try {
       const url = new URL(rawUrl, DLSTREAMS_SITE);
-      const verifiedHostAndPath = (url.hostname === "daddyliveplayer.st" && DADDYLIVE_PLAYER_PATHS.has(url.pathname)) ||
+      const verifiedHostAndPath = (["daddyliveplayer.st", "dembed.st"].includes(url.hostname) && DADDYLIVE_PLAYER_PATHS.has(url.pathname)) ||
         (url.hostname.endsWith(".romponalis.st") && ROMPONALIS_PLAYER_PATHS.has(url.pathname));
       const channelIds = url.searchParams.getAll("id");
       const onlyChannelIdParameter = [...url.searchParams.keys()].every((key) => key === "id");
