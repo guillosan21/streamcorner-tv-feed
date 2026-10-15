@@ -359,6 +359,9 @@ export function retainPreviousPizarraMxGames(feed, now = new Date()) {
   if (!Number.isFinite(publishedMs) || publishedMs > nowMs || nowMs - publishedMs > 15 * 60 * 1000) return [];
   return feed.games.flatMap((game) => {
     if (!game || game.provider !== "pizarramx" || game.scheduleState === "post") return [];
+    const observedAt = game.providerObservedAt ?? feed.updatedAt;
+    const observedMs = Date.parse(observedAt);
+    if (!Number.isFinite(observedMs) || observedMs > nowMs || nowMs - observedMs > 15 * 60 * 1000) return [];
     if (game.status !== "live" && game.status !== "upcoming") return [];
     const startsAt = Date.parse(game.startsAt || "");
     const untimedManual = !String(game.startsAt || "").trim() &&
@@ -379,6 +382,7 @@ export function retainPreviousPizarraMxGames(feed, now = new Date()) {
     const normalizeToUpcoming = (untimedManual || futureProviderLive) && sources.length > 0;
     return [{
       ...game,
+      providerObservedAt: observedAt,
       ...(normalizeToUpcoming ? { status: "upcoming", scheduleState: "pre" } : {}),
       sources: normalizeToUpcoming ? sources.map((source) => ({ ...source, availableBeforeKickoff: true })) : sources,
     }];

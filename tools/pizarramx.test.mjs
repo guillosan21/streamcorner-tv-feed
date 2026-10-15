@@ -325,6 +325,14 @@ test("Pizarra outage omits stale, future-dated and missing-age baselines without
   assert.ok(retainPreviousPizarraMxGames({ updatedAt: "2026-09-26T19:45:00Z", games }, now).length > 0);
 });
 
+test("Pizarra fallback publication cannot renew the original provider observation", () => {
+  const games = parsePizarraMxCatalog(sampleData().data, sampleData().manual);
+  const first = retainPreviousPizarraMxGames({ updatedAt: "2026-09-26T20:00:00Z", games }, new Date("2026-09-26T20:10:00Z"));
+  assert.ok(first.length > 0);
+  assert.ok(first.every(game => game.providerObservedAt === "2026-09-26T20:00:00Z"));
+  assert.deepEqual(retainPreviousPizarraMxGames({ updatedAt: "2026-09-26T20:10:00Z", games: first }, new Date("2026-09-26T20:20:00Z")), []);
+});
+
 test("legacy untimed manual Live cards are demoted and stay Upcoming across repeated fallback", () => {
   const now = new Date("2026-09-26T20:00:00Z");
   const manual = parsePizarraMxCatalog(sampleData().data, sampleData().manual)
