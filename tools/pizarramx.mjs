@@ -354,6 +354,9 @@ export function parsePizarraMxCatalog(data, manual = [], now = new Date()) {
 export function retainPreviousPizarraMxGames(feed, now = new Date()) {
   const nowMs = new Date(now).getTime();
   if (!Number.isFinite(nowMs) || !Array.isArray(feed?.games)) return [];
+  const publishedMs = Date.parse(feed.updatedAt || "");
+  // An upstream outage must not renew old event/source availability indefinitely.
+  if (!Number.isFinite(publishedMs) || publishedMs > nowMs || nowMs - publishedMs > 15 * 60 * 1000) return [];
   return feed.games.flatMap((game) => {
     if (!game || game.provider !== "pizarramx" || game.scheduleState === "post") return [];
     if (game.status !== "live" && game.status !== "upcoming") return [];

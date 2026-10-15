@@ -316,6 +316,15 @@ test("Pizarra fallback carries forward only recent-looking valid opaque refs", (
   assert.equal(futureProviderLive.sources[0].availableBeforeKickoff, true);
 });
 
+test("Pizarra outage omits stale, future-dated and missing-age baselines without throwing", () => {
+  const now = new Date("2026-09-26T20:00:00Z");
+  const games = parsePizarraMxCatalog(sampleData().data, sampleData().manual);
+  for (const updatedAt of [undefined, "invalid", "2026-09-21T20:00:00Z", "2026-09-26T19:44:59Z", "2026-09-26T20:00:01Z"]) {
+    assert.deepEqual(retainPreviousPizarraMxGames({ updatedAt, games }, now), []);
+  }
+  assert.ok(retainPreviousPizarraMxGames({ updatedAt: "2026-09-26T19:45:00Z", games }, now).length > 0);
+});
+
 test("legacy untimed manual Live cards are demoted and stay Upcoming across repeated fallback", () => {
   const now = new Date("2026-09-26T20:00:00Z");
   const manual = parsePizarraMxCatalog(sampleData().data, sampleData().manual)

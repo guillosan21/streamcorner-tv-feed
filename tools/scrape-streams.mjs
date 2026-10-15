@@ -906,14 +906,9 @@ try {
       ? previousFeed.games.filter((game) => game?.provider === "pizarramx") : [];
     const retained = retainPreviousPizarraMxGames(previousFeed, now).filter(isSupportedSportsEntry);
     if (previousCards.length) {
-      const previousUpdatedAt = Date.parse(previousFeed.updatedAt || "");
-      const fallbackAgeMs = now.getTime() - previousUpdatedAt;
-      if (!Number.isFinite(previousUpdatedAt) || fallbackAgeMs < 0 || fallbackAgeMs > 15 * 60 * 1000 || !retained.length) {
-        throw new Error(`Pizarra MX unavailable and its prior cards are too stale or invalid to carry forward (${retained.length}/${previousCards.length} retained)`);
-      }
       pizarramxRetainedGameCount = retained.length;
       games.push(...retained);
-      console.warn(`Pizarra MX retained ${retained.length} recent prior card(s) after fetch failure`);
+      console.warn(`Pizarra MX retained ${retained.length} recent prior card(s); stale or invalid cards omitted without blocking other providers`);
     }
   }
 
