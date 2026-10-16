@@ -1,6 +1,8 @@
 const PPV_API = "https://api.ppv.st/api/streams";
 const PPV_SITE = "https://ppv.st/";
 const PPV_EMBED_ORIGIN = "https://embedindia.st";
+// Exact page hosts observed in the provider API; never infer trust from a suffix or redirect.
+const PPV_CATALOG_EMBED_HOSTS = new Set(["embedindia.st", "taifood-blog.asia"]);
 
 const CANONICAL_LEAGUES = new Map([
   ["NFL", "NFL"], ["MLB", "MLB"], ["NBA", "NBA"], ["WNBA", "WNBA"], ["NHL", "NHL"],
@@ -36,7 +38,13 @@ function safeEmbedUrl(event) {
     const signedIframe = String(event?.iframe || "").trim();
     if (signedIframe) {
       const signedUrl = new URL(signedIframe);
-      if (signedUrl.protocol === "https:" && signedUrl.host === "embedindia.st" && signedUrl.pathname === expectedPath) {
+      if (signedUrl.protocol === "https:" && PPV_CATALOG_EMBED_HOSTS.has(signedUrl.host) &&
+          !signedUrl.username && !signedUrl.password && !signedUrl.hash &&
+          (signedUrl.hostname !== "taifood-blog.asia" ||
+            (!uriName.includes("..") && uriName.split("/").length <= 21 &&
+              uriName.split("/").every((segment) => /^[A-Za-z0-9][A-Za-z0-9._~-]*$/.test(segment)) &&
+              signedIframe === `https://taifood-blog.asia${expectedPath}`)) &&
+          signedUrl.pathname === expectedPath) {
         // The gid query parameter authorizes the media session. A bare /embed URL
         // renders JWPlayer but often has no playable event behind its Play button.
         return signedUrl.href;
@@ -85,3 +93,4 @@ export async function fetchPpvGames(now) {
 }
 
 export const __testing = { displayLeague, eventTeams, isAlwaysLive, safeEmbedUrl };
+
