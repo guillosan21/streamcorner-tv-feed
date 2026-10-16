@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { fetchTimStreamsGames } from "./timstreams.mjs";
+import { espnEventInfo, mergeEventInfoRows } from "./event-info.mjs";
 import { collectSportsUpaMainGames, collectSportsUpaAdminGames, isSportsUpaHdSource } from "./sportsupa.mjs";
 import { fetchPpvGames } from "./ppvstreams.mjs";
 import { fetchDlStreamsGames, findBroadcastChannelGames } from "./dlstreams.mjs";
@@ -312,10 +313,13 @@ export function deduplicateFeedGames(rows) {
     const authority = (row) => (row.scoreboardLeagueId ? 8 : 0) + (row.scheduleState ? 4 : 0) +
       (String(row.homeLogoUrl || "").includes("espncdn.com") && String(row.awayLogoUrl || "").includes("espncdn.com") ? 2 : 0) +
       (row.venue ? 1 : 0);
+    const editorialPreferred = authority(game) > authority(existing) ? game : existing;
+    const mergedEventInfo = mergeEventInfoRows(editorialPreferred, editorialPreferred === game ? existing : game, authoritativeSchedule || editorialPreferred);
     if (authority(game) > authority(existing)) {
       Object.assign(existing, game);
     }
     existing.sources = preservedSources;
+    if (mergedEventInfo) existing.eventInfo = mergedEventInfo;
     if (Number.isFinite(pendingKickoffHold)) {
       existing.awaitingOfficialKickoffUntil = new Date(pendingKickoffHold).toISOString();
     } else {
@@ -401,6 +405,7 @@ export function attachScheduleGames(sourceGames, scheduleGames, now = new Date()
         match.awayScore = scheduled.awayScore;
         match.scoreDetail = scheduled.scoreDetail;
         match.espnBroadcasts = scheduled.espnBroadcasts;
+        match.eventInfo = scheduled.eventInfo;
         match.sources = deduplicateFeedSources(match.sources, scheduled.sources);
       }
     } else if (scheduled.scheduleState !== "post") {
@@ -682,6 +687,7 @@ async function fetchMajorLeagueSchedules(now) {
           isDelayed: isDelayed && scheduleState !== "post",
           ...(restartAt ? { restartAt } : {}),
           espnBroadcasts,
+          eventInfo: espnEventInfo(event, competition),
           homeScore, awayScore, scoreDetail,
           homeTeam, awayTeam,
           homeLogoUrl: String(home.team?.logo || "").replace(/^http:/, "https:"),
@@ -697,6 +703,7 @@ async function fetchMajorLeagueSchedules(now) {
             isDelayed: isDelayed && scheduleState !== "post",
             ...(restartAt ? { restartAt } : {}),
             homeTeam, awayTeam, homeScore, awayScore,
+            eventInfo: espnEventInfo(event, competition),
             homeLogoUrl: String(home.team?.logo || "").replace(/^http:/, "https:"),
             awayLogoUrl: String(away.team?.logo || "").replace(/^http:/, "https:"),
             venue,
