@@ -8,6 +8,31 @@ export function isRetiredPizarraSource(source) {
 }
 
 const TIMSTREAMS_PLAYER_HOSTS = new Set(["exmxbxe.cfd", "epiembeds.online", "ehgembxe.cfd"]);
+const STREAMCORNER_INGEST_PATH = /^\/embed\/ingest\/(?:[A-Za-z0-9_-]{1,64}\/){0,3}[A-Za-z0-9_-]{1,128}\/?$/;
+
+export function streamCornerIngestPath(value) {
+  if (typeof value !== "string" || value.length > 512) return null;
+  const match = /^streamcorner:v1~([A-Za-z0-9_-]+)$/.exec(value);
+  if (!match || match[0] !== value) return null;
+  const bytes = Buffer.from(match[1], "base64url");
+  const path = bytes.toString("utf8");
+  return bytes.toString("base64url") === match[1] && Buffer.from(path, "utf8").equals(bytes) &&
+    STREAMCORNER_INGEST_PATH.test(path) && path === path.trim() ? path : null;
+}
+
+export function isNativeStreamCornerSource(source) {
+  const path = streamCornerIngestPath(source?.providerSourceRef);
+  return Boolean(path && source.provider === "StreamCorner" && source.embedProvider === "StreamCorner" &&
+    String(source.name || "").startsWith("StreamCorner • ") && source.url === "" && !source.clearKey &&
+    source.providerGeneration === "v1" && source.availabilityEvidence === "provider-reported" &&
+    source.embedUrl === `https://embed.st${path}#player=clappr&autoplay=true` &&
+    source.headers?.Referer === "https://streamcorner.st/" && Object.keys(source.headers).length === 1);
+}
+
+export function isStreamCornerNativeCandidate(source) {
+  return (source?.provider === "StreamCorner" && Boolean(source?.providerSourceRef || source?.embedUrl)) ||
+    /^streamcorner:/i.test(String(source?.providerSourceRef || "").trim());
+}
 export function isValidTimStreamsSourceRef(value) {
   const ref = String(value || "");
   if (!ref.startsWith("timstreams:") || ref.length > 191) return false;
@@ -33,6 +58,7 @@ export function isOpaqueTimStreamsSource(source) {
 
 export function feedSourceKey(source) {
   if (isRetiredPizarraSource(source)) return "";
+  if (isStreamCornerNativeCandidate(source) && !isNativeStreamCornerSource(source)) return "";
   const providerSourceRef = String(source?.providerSourceRef || "");
   if (source?.provider === "TimStreams" && (source?.providerGeneration === "v2" || providerSourceRef.trim().startsWith("timstreams:v2~")) && !isOpaqueTimStreamsSource(source)) return "";
   if (providerSourceRef) {
@@ -46,6 +72,9 @@ export function feedSourceKey(source) {
 }
 
 export function playbackIdentity(source) {
+  if (isStreamCornerNativeCandidate(source)) {
+    return isNativeStreamCornerSource(source) ? `resolver:${source.providerSourceRef}:generation:v1` : "";
+  }
   if (source?.provider === "TimStreams" && source?.providerSourceRef) {
     return isOpaqueTimStreamsSource(source) ? `resolver:${source.providerSourceRef}:generation:v2` : "";
   }

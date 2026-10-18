@@ -8,7 +8,7 @@ import { collectSportsUpaMainGames, collectSportsUpaAdminGames, isSportsUpaHdSou
 import { fetchPpvGames } from "./ppvstreams.mjs";
 import { fetchDlStreamsGames, findBroadcastChannelGames } from "./dlstreams.mjs";
 import { fetchHighflyGames, attachAddonSources, preferAddonOverPpv } from "./highfly.mjs";
-import { feedSourceKey, isOpaqueTimStreamsSource, isRetiredPizarraSource } from "./playback-identity.mjs";
+import { feedSourceKey, isOpaqueTimStreamsSource, isRetiredPizarraSource, isNativeStreamCornerSource, isStreamCornerNativeCandidate } from "./playback-identity.mjs";
 import { loadTrustedFeedBaseline } from "./feed-baseline.mjs";
 import { compareFeedSourceCoverage } from "./feed-safety.mjs";
 import { assertSufficientEspnScheduleCoverage, espnLiveScheduleDates, espnScheduleDates, fetchEspnSchedules } from "./espn-schedules.mjs";
@@ -413,6 +413,9 @@ export function sourceProvenanceErrors(rows) {
       if (provider === "SportsUpa" && !isSportsUpaHdSource(source)) {
         errors.push(`${game.id}: SportsUpa requires an affirmative HD canonical Main or Admin source`);
       }
+      if (isStreamCornerNativeCandidate(source) && !isNativeStreamCornerSource(source)) {
+        errors.push(`${game.id}: StreamCorner native source requires an exact stable ingest binding`);
+      }
       if (provider === "TimStreams" && rawProviderRef && !isOpaqueTimStreamsSource(source)) {
         errors.push(`${game.id}: TimStreams source must be an exact catalog ref without published transport state`);
       }
@@ -586,6 +589,7 @@ function activeGameAt(game, nowMs) {
 
 export async function inspectStreamCapabilities(source, provider = "") {
   if (isRetiredSource(source)) return null;
+  if (isStreamCornerNativeCandidate(source)) return isNativeStreamCornerSource(source) ? source : null;
   if (source.provider === "TimStreams" && source.providerSourceRef) return isOpaqueTimStreamsSource(source) ? source : null;
   if (source.provider === "SportsUpa") return isSportsUpaHdSource(source) ? source : null;
   if (!source.url) {
