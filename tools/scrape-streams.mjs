@@ -8,11 +8,10 @@ import { collectSportsUpaMainGames, collectSportsUpaAdminGames, isSportsUpaHdSou
 import { fetchPpvGames } from "./ppvstreams.mjs";
 import { fetchDlStreamsGames, findBroadcastChannelGames } from "./dlstreams.mjs";
 import { fetchHighflyGames, attachAddonSources, preferAddonOverPpv } from "./highfly.mjs";
-import { feedSourceKey, isValidPizarraMxSourceRef, isOpaqueTimStreamsSource } from "./playback-identity.mjs";
+import { feedSourceKey, isOpaqueTimStreamsSource, isRetiredPizarraSource } from "./playback-identity.mjs";
 import { loadTrustedFeedBaseline } from "./feed-baseline.mjs";
 import { compareFeedSourceCoverage } from "./feed-safety.mjs";
 import { assertSufficientEspnScheduleCoverage, espnLiveScheduleDates, espnScheduleDates, fetchEspnSchedules } from "./espn-schedules.mjs";
-import { fetchPizarraMxGames, retainPreviousPizarraMxGames } from "./pizarramx.mjs";
 import { fetchStreamCornerGames } from "./streamcorner.mjs";
 import { filterKnownStandardDefinitionSources, maxHeightFromManifest } from "./stream-quality.mjs";
 import { isRetiredSource } from "./retired-snapshot.mjs";
@@ -61,7 +60,7 @@ function estimatedDurationSeconds(title, league, sport) {
 }
 
 function canonicalTeam(value) {
-  // Explicit national-team spellings, including Pizarra's Spanish abbreviation.
+  // Explicit national-team spellings, including Spanish abbreviations.
   if (/^(?:ee\.?\s*uu\.?|usa|u\.?s\.?a\.?|united states|estados unidos)$/i.test(String(value || "").trim())) return "united states";
   return String(value || "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()
     .replace(/\bchiacgo\b/g, "chicago")
@@ -104,11 +103,6 @@ function similarTeam(first, second) {
   return matched >= Math.min(firstTokens.length, secondTokens.length);
 }
 
-// Only provider-declared early streams get the wide join window; normal Pizarra
-// event clocks remain limited to the same rounding tolerance as other feeds.
-const MAX_PIZARRA_SCHEDULE_SKEW_MS = 18 * 60 * 60 * 1000;
-const MAX_PIZARRA_NORMAL_SCHEDULE_SKEW_MS = 45 * 60 * 1000;
-const MAX_PIZARRA_UTC_DAY_SKEW = 1;
 const TIME_LIMITED_DLSTREAMS_ATTACHMENTS = Object.freeze([
   {
     scoreboardEventId: "espn-mlb-401907896",
@@ -120,80 +114,12 @@ const TIME_LIMITED_DLSTREAMS_ATTACHMENTS = Object.freeze([
   },
 ]);
 
-function isEarlyPizarraEvent(game) {
-  return game?.provider === "pizarramx" &&
-    (game.sources || []).some((source) => source?.availableBeforeKickoff === true);
-}
 
 function hasExplicitDoubleheaderMarker(game) {
   return /\b(?:game|match)\s*[12]\b|\b(?:1st|2nd)\s+(?:game|match)\b|\bdouble[- ]?header\b/i.test(
     `${game.title || ""} ${game.homeTeam || ""} ${game.awayTeam || ""}`);
 }
 
-function scheduleSportKey(game) {
-  const value = canonicalTeam(game?.sport || "");
-  if (["football", "soccer", "association football"].includes(value)) return "soccer";
-  if (["nfl", "american football", "football americano"].includes(value)) return "american football";
-  if (["mlb", "baseball"].includes(value)) return "baseball";
-  if (["nba", "wnba", "basketball"].includes(value)) return "basketball";
-  if (["nhl", "hockey", "ice hockey"].includes(value)) return "hockey";
-  return value;
-}
-
-function scheduleLeagueKey(game) {
-  const value = canonicalTeam(game?.league || game?.scoreboardLeagueId || "");
-  const aliases = {
-    "liga bbva mx": "liga mx",
-    "major league baseball": "mlb",
-    "uefa champions league": "champions league",
-    "uefa europa league": "europa league",
-  };
-  return aliases[value] || value;
-}
-
-function exactCompatibleMatchup(first, second) {
-  if (hasExplicitDoubleheaderMarker(first) || hasExplicitDoubleheaderMarker(second)) return false;
-  if (!scheduleSportKey(first) || scheduleSportKey(first) !== scheduleSportKey(second)) return false;
-  const firstLeague = scheduleLeagueKey(first);
-  if (!firstLeague || firstLeague !== scheduleLeagueKey(second)) return false;
-  const left = eventSides(first);
-  const right = eventSides(second);
-  if (left.length !== 2 || right.length !== 2) return false;
-  return (left[0] === right[0] && left[1] === right[1]) ||
-    (left[0] === right[1] && left[1] === right[0]);
-}
-
-function pizarraCompatibleScheduleCandidates(game, scheduleGames) {
-  if (game?.provider !== "pizarramx") return [];
-  const gameStart = Date.parse(game.startsAt || "");
-  if (!Number.isFinite(gameStart)) return [];
-  const allowedSkew = isEarlyPizarraEvent(game)
-    ? MAX_PIZARRA_SCHEDULE_SKEW_MS
-    : MAX_PIZARRA_NORMAL_SCHEDULE_SKEW_MS;
-  const gameDay = Math.floor(gameStart / 86_400_000);
-  return scheduleGames.filter((candidate) => {
-    const candidateStart = Date.parse(candidate?.startsAt || "");
-    const state = String(candidate?.scheduleState || "").toLowerCase();
-    return String(candidate?.scoreboardEventId || "").trim() && Number.isFinite(candidateStart) &&
-      ["pre", "in", "post"].includes(state) &&
-      Math.abs(candidateStart - gameStart) <= allowedSkew &&
-      Math.abs(Math.floor(candidateStart / 86_400_000) - gameDay) <= MAX_PIZARRA_UTC_DAY_SKEW &&
-      exactCompatibleMatchup(game, candidate);
-  });
-}
-
-export function pizarraScheduleSkewMatches(game, scheduled, sourceGames, scheduleGames) {
-  if (game?.provider !== "pizarramx") return false;
-  const candidates = pizarraCompatibleScheduleCandidates(game, scheduleGames);
-  const scheduledId = String(scheduled?.scoreboardEventId || "").trim();
-  if (candidates.length !== 1 || !scheduledId ||
-      String(candidates[0].scoreboardEventId).trim() !== scheduledId ||
-      !exactCompatibleMatchup(game, candidates[0])) return false;
-
-  const otherPizarraRows = sourceGames.filter((candidate) => candidate.id !== game.id &&
-    candidate.provider === "pizarramx" && pizarraCompatibleScheduleCandidates(candidate, [scheduled]).length > 0);
-  return otherPizarraRows.length === 0;
-}
 
 export function sameFeedEvent(first, second) {
   const firstScoreboardId = String(first.scoreboardEventId || "").trim();
@@ -201,10 +127,6 @@ export function sameFeedEvent(first, second) {
   if ((first.doNotAttachToOfficialSchedule && secondScoreboardId) ||
       (second.doNotAttachToOfficialSchedule && firstScoreboardId)) return false;
   if (firstScoreboardId && secondScoreboardId) return firstScoreboardId.toLowerCase() === secondScoreboardId.toLowerCase();
-  if ((first.provider === "pizarramx" && secondScoreboardId) ||
-      (second.provider === "pizarramx" && firstScoreboardId)) return false;
-  if ((first.provider === "pizarramx" && !firstScoreboardId && first.id !== second.id) ||
-      (second.provider === "pizarramx" && !secondScoreboardId && first.id !== second.id)) return false;
   if (hasExplicitDoubleheaderMarker(first) || hasExplicitDoubleheaderMarker(second)) return false;
   if (!first.startsAt || !second.startsAt) return first.id === second.id;
   if (Math.abs(Date.parse(first.startsAt) - Date.parse(second.startsAt)) > 30 * 60 * 1000) return false;
@@ -360,9 +282,6 @@ function scheduleMatchForSource(game, scheduled, sourceGames, scheduleGames) {
   if (sourceScoreboardId && scheduledScoreboardId) {
     return sourceScoreboardId.toLowerCase() === scheduledScoreboardId.toLowerCase();
   }
-  if (game.provider === "pizarramx") {
-    return pizarraScheduleSkewMatches(game, scheduled, sourceGames, scheduleGames);
-  }
 
   const gameTeams = [canonicalTeam(game.homeTeam), canonicalTeam(game.awayTeam)].filter(Boolean).sort().join("|");
   const scheduledTeams = [canonicalTeam(scheduled.homeTeam), canonicalTeam(scheduled.awayTeam)].filter(Boolean).sort().join("|");
@@ -413,66 +332,9 @@ export function attachScheduleGames(sourceGames, scheduleGames, now = new Date()
     }
   }
 
-  const nowMs = Date.parse(now instanceof Date ? now.toISOString() : now);
-  for (const game of games) {
-    if (game.provider !== "pizarramx") continue;
-    delete game.awaitingOfficialKickoffUntil;
-    delete game.doNotAttachToOfficialSchedule;
-    if (String(game.scoreboardEventId || "").trim()) continue;
-    game.doNotAttachToOfficialSchedule = true;
-    // Android honors this hold and source flag while its narrower local event
-    // matcher waits; keeping the durable guard also prevents later score joins
-    // from guessing between same-team doubleheaders.
-    if (!Number.isFinite(nowMs) || !isEarlyPizarraEvent(game)) continue;
-    const candidates = pizarraCompatibleScheduleCandidates(game, scheduleGames);
-    const allFarPre = candidates.length > 0 && candidates.every((candidate) => {
-      const start = Date.parse(candidate.startsAt || "");
-      return String(candidate.scheduleState || "").toLowerCase() === "pre" &&
-        Number.isFinite(start) && start - nowMs > 15 * 60 * 1000;
-    });
-    if (allFarPre) {
-      const earliestStart = Math.min(...candidates.map((candidate) => Date.parse(candidate.startsAt)));
-      game.awaitingOfficialKickoffUntil = new Date(earliestStart - 15 * 60 * 1000).toISOString();
-    }
-  }
   return deduplicateFeedGames(games.filter((game) => game.scheduleState !== "post"));
 }
 
-/** Attach timed manual listings only to a unique, corroborated provider fixture. */
-export function attachTimedPizarraManualGames(games) {
-  const isManual = (game) => game?.provider === "pizarramx" &&
-    String(game.id || "").startsWith("pizarramx-manual-");
-  const compatible = (manual, candidate) => {
-    // An ESPN-bound manual row already has authoritative fixture identity/status.
-    // Do not replace it with a provider-only (or differently bound) anchor.
-    if (manual.scoreboardEventId && manual.scoreboardEventId !== candidate.scoreboardEventId) return false;
-    if (candidate.provider === "pizarramx" || candidate.is24x7 || candidate.scheduleState === "post" ||
-        hasExplicitDoubleheaderMarker(manual) || hasExplicitDoubleheaderMarker(candidate)) return false;
-    const start = Date.parse(manual.startsAt || "");
-    const otherStart = Date.parse(candidate.startsAt || "");
-    if (!Number.isFinite(start) || !Number.isFinite(otherStart) || Math.abs(start - otherStart) > 45 * 60 * 1000) return false;
-    const sport = scheduleSportKey(manual);
-    if (!sport || sport !== scheduleSportKey(candidate)) return false;
-    const league = scheduleLeagueKey(manual);
-    const otherLeague = scheduleLeagueKey(candidate);
-    const genericSoccer = new Set(["soccer", "football", "friendly match", "amistoso", "amistoso internacional"]);
-    if (league !== otherLeague && !(sport === "soccer" && genericSoccer.has(league) && genericSoccer.has(otherLeague))) return false;
-    const left = eventSides(manual).sort();
-    const right = eventSides(candidate).sort();
-    return left.length === 2 && right.length === 2 && left.every((side, index) => side && side === right[index]);
-  };
-  const attachments = new Map();
-  for (const manual of games.filter(isManual)) {
-    const candidates = games.filter((candidate) => compatible(manual, candidate));
-    // Multiple cards or multiple manual declarations require stronger identity evidence.
-    if (candidates.length !== 1 || games.filter((row) => isManual(row) && compatible(row, candidates[0])).length !== 1) continue;
-    attachments.set(manual, candidates[0]);
-  }
-  for (const [manual, candidate] of attachments) {
-    candidate.sources = deduplicateFeedSources(candidate.sources, manual.sources);
-  }
-  return games.filter((game) => !attachments.has(game));
-}
 
 export function attachTimeLimitedDlStreamsSources(games, now = new Date()) {
   const rows = Array.isArray(games) ? games : [];
@@ -539,12 +401,10 @@ export function sourceProvenanceErrors(rows) {
       const embedProvider = String(source.embedProvider || "");
       const inferred = inferredWebProvider(source.embedUrl);
       const rawProviderRef = String(source.providerSourceRef || "");
-      const isPizarraRef = provider === "Pizarra MX" && rawProviderRef === rawProviderRef.trim() &&
-        isValidPizarraMxSourceRef(rawProviderRef);
       if (isRetiredSource(source)) {
-        errors.push(`${game.id}: retired Streamed source cannot be published`);
+        errors.push(`${game.id}: retired source cannot be published`);
       }
-      if (!["StreamCorner", "TimStreams", "PPV", "Sports Streams", "DLStreams", "Pizarra MX", "SportsUpa"].includes(provider)) {
+      if (!["StreamCorner", "TimStreams", "PPV", "Sports Streams", "DLStreams", "SportsUpa"].includes(provider)) {
         errors.push(`${game.id}: invalid provider ${provider || "<empty>"}`);
       }
       if (!String(source.name || "").startsWith(`${provider} • `)) {
@@ -552,9 +412,6 @@ export function sourceProvenanceErrors(rows) {
       }
       if (provider === "SportsUpa" && !isSportsUpaHdSource(source)) {
         errors.push(`${game.id}: SportsUpa requires an affirmative HD canonical Main or Admin source`);
-      }
-      if (provider === "Pizarra MX" && (!isPizarraRef || source.url || source.embedUrl || Object.keys(source.headers || {}).length)) {
-        errors.push(`${game.id}: Pizarra MX source must be an exact opaque ref without published transport state`);
       }
       if (provider === "TimStreams" && rawProviderRef && !isOpaqueTimStreamsSource(source)) {
         errors.push(`${game.id}: TimStreams source must be an exact catalog ref without published transport state`);
@@ -728,10 +585,9 @@ function activeGameAt(game, nowMs) {
 }
 
 export async function inspectStreamCapabilities(source, provider = "") {
+  if (isRetiredSource(source)) return null;
   if (source.provider === "TimStreams" && source.providerSourceRef) return isOpaqueTimStreamsSource(source) ? source : null;
   if (source.provider === "SportsUpa") return isSportsUpaHdSource(source) ? source : null;
-  if (source.provider === "Pizarra MX" && isValidPizarraMxSourceRef(source.providerSourceRef) &&
-      !source.url && !source.embedUrl && !Object.keys(source.headers || {}).length) return source;
   if (!source.url) {
     if (!source.embedUrl) return null;
     // TimStreams already verifies the underlying live manifest before returning
@@ -803,7 +659,9 @@ try {
       previousFeedTrusted = trusted;
       if (trusted) console.log(`Loaded trusted previous feed baseline from ${source}`);
       else console.warn("No trusted previous feed baseline is available");
-      return feed;
+      return { ...feed, games: (Array.isArray(feed.games) ? feed.games : [])
+        .map((game) => ({ ...game, sources: (game.sources || []).filter((source) => !isRetiredSource(source)) }))
+        .filter((game) => game.sources.length || !isRetiredPizarraSource({ provider: game.provider })) };
     });
     return previousFeedPromise;
   }
@@ -901,23 +759,6 @@ try {
   if (retainedDlStreams.length) catalogCounts.dlstreams = retainedDlStreams.length;
   games.push(...(dlStreams.games.length ? dlStreams.games : retainedDlStreams).filter(isSupportedSportsEntry));
 
-  console.log("Fetching Pizarra MX catalog");
-  const pizarraMx = await fetchPizarraMxGames(now);
-  catalogCounts.pizarramx = pizarraMx.catalogCount;
-  let pizarramxRetainedGameCount = 0;
-  if (pizarraMx.error) console.warn(`Pizarra MX unavailable: ${pizarraMx.error}`);
-  games.push(...pizarraMx.games.filter(isSupportedSportsEntry));
-  if (pizarraMx.error) {
-    const previousFeed = await loadPreviousFeed();
-    const previousCards = Array.isArray(previousFeed.games)
-      ? previousFeed.games.filter((game) => game?.provider === "pizarramx") : [];
-    const retained = retainPreviousPizarraMxGames(previousFeed, now).filter(isSupportedSportsEntry);
-    if (previousCards.length) {
-      pizarramxRetainedGameCount = retained.length;
-      games.push(...retained);
-      console.warn(`Pizarra MX retained ${retained.length} recent prior card(s); stale or invalid cards omitted without blocking other providers`);
-    }
-  }
 
   console.log("Fetching SportsUpa HD Main catalog");
   try {
@@ -945,7 +786,6 @@ try {
   const scheduledGames = [...new Map([...schedule.games, ...schedule.completed]
     .map((game) => [String(game.scoreboardEventId || game.id), game])).values()];
   games = attachScheduleGames(games, scheduledGames, now);
-  games = attachTimedPizarraManualGames(games);
   console.log("Fetching Sports Streams catalog");
   const highfly = await fetchHighflyGames(now);
   catalogCounts.highfly = highfly.catalogCount;
@@ -1052,8 +892,6 @@ try {
     qualityFilteredSourceCount,
     qualityFilteredSourcesByProvider,
     scheduleCoverage: schedule.scheduleCoverage,
-    pizarramxError: pizarraMx.error,
-    pizarramxRetainedGameCount,
     highflyCatalogCount: highfly.catalogCount,
     highflySourceCount: games.flatMap((game) => game.sources).filter((source) => source.provider === "Sports Streams").length,
     addonPpvDuplicatesRemoved,
@@ -1100,8 +938,6 @@ try {
       streamCornerWarning: streamCorner.warning,
       streamCornerSourceCount: games.flatMap((game) => game.sources).filter((source) => source.provider === "StreamCorner").length,
       streamCornerDecoderUrl: streamCorner.decoderUrl,
-      pizarramxError: pizarraMx.error,
-      pizarramxRetainedGameCount,
       timStreamsResolvedStreamCount: timStreams.resolvedStreamCount,
       timStreamsProviderReportedStreamCount: timStreams.providerReportedStreamCount || 0,
       ppvPlayableCount: ppv.playableCount,
@@ -1128,8 +964,6 @@ try {
     qualityFilteredSourcesByProvider,
     scheduleCoverage: schedule.scheduleCoverage,
     streamCornerError: streamCorner.error,
-    pizarramxError: pizarraMx.error,
-    pizarramxRetainedGameCount,
     catalogCounts,
     gameCount: games.length,
     directStreamCount: directStreams.length,

@@ -1,8 +1,9 @@
 import vm from "node:vm";
-import { createHash } from "node:crypto";
+import { Worker } from "node:worker_threads";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
-const SITE = "https://cornerstream.tech/";
+const SITE = "https://streamcorner.st/";
 const PROVIDERS = ["admin", "nba", "nfl", "alpha", "beta", "001", "003"];
 const MAX_ASSET_BYTES = 600_000;
 const MAX_RESPONSE_BYTES = 4_000_000;
@@ -82,7 +83,7 @@ export async function loadStreamCornerRuntime(fetcher) {
   }
 }
 
-function decoderFor(runtime, fetcher) {
+export function decoderFor(runtime, fetcher) {
   const allowedHosts = new Set(runtime.workers);
   const providerFetch = async (input, init = {}) => {
     const url = new URL(String(input));
@@ -97,14 +98,47 @@ function decoderFor(runtime, fetcher) {
   };
   const sandbox = {
     fetch: providerFetch, crypto: globalThis.crypto, URL, URLSearchParams,
-    TextEncoder, TextDecoder, atob, btoa, setTimeout, clearTimeout,
+    TextEncoder, TextDecoder, ArrayBuffer, atob, btoa, setTimeout, clearTimeout,
     AbortController, AbortSignal,
   };
   vm.createContext(sandbox);
   const source = runtime.decoderCode.replace(/export\{[^}]+\};?/, `globalThis.__decode=${runtime.decoderExport};`);
   vm.runInContext(source, sandbox, { timeout: 2_000 });
   if (typeof sandbox.__decode !== "function") throw new Error("StreamCorner decoder did not initialize");
-  return sandbox.__decode;
+  // Invoke untrusted synchronous decoder work inside the same bounded VM. Keep arguments
+  // private to this factory invocation, and remove them even when execution times out.
+  const argumentKey = `__streamCornerArgs_${randomUUID().replaceAll("-", "")}`;
+  return (...args) => {
+    sandbox[argumentKey] = args;
+    try {
+      return vm.runInContext(`globalThis.__decode(...globalThis[${JSON.stringify(argumentKey)}])`, sandbox, { timeout: 2_000 });
+    } finally {
+      delete sandbox[argumentKey];
+    }
+  };
+}
+
+/** Parent deadline also interrupts decoder work resumed after an async boundary.
+ * A worker is CPU/lifetime isolation, not a security sandbox for arbitrary code.
+ */
+export function isolatedDecoderFor(runtime, timeoutMs = 13_000) {
+  return (...args) => new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./streamcorner-decoder-worker.mjs', import.meta.url), {
+      workerData: { runtime, args },
+    });
+    let settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      void worker.terminate();
+      if (error) reject(error); else resolve(value);
+    };
+    const timer = setTimeout(() => finish(new Error('provider decoder timed out')), timeoutMs);
+    worker.once('message', result => result.ok ? finish(null, result.value) : finish(new Error('provider decoder failed')));
+    worker.once('error', () => finish(new Error('provider decoder failed')));
+    worker.once('exit', () => { if (!settled) finish(new Error('provider decoder exited')); });
+  });
 }
 
 async function request(decoder, workers, provider, id = "") {
@@ -174,7 +208,7 @@ export async function fetchStreamCornerGames(now, estimatedDurationSeconds, fetc
   const catalogCounts = Object.fromEntries(PROVIDERS.map((provider) => [provider, 0]));
   try {
     const runtime = await loadStreamCornerRuntime(fetcher);
-    const decoder = decoderFor(runtime, fetcher);
+    const decoder = fetcher === fetch ? isolatedDecoderFor(runtime) : decoderFor(runtime, fetcher);
     const catalogErrors = [];
     const catalogs = await Promise.all(PROVIDERS.map(async (provider) => {
       try {

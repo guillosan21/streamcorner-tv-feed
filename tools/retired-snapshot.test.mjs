@@ -131,3 +131,27 @@ test("snapshot validator rejects unrelated game, source, score, status, and time
     );
   }
 });
+
+
+test("Pizarra retirement removes source aliases and stale cards while preserving independent mixed sources", () => {
+  const independent = { provider: "PPV", name: "PPV • Main", embedUrl: "https://ppv.st/player/main" };
+  const variants = [
+    { provider: "Pizarra MX" }, { embedProvider: "pizarramx" }, { name: "Pizarra MX • Main" },
+    { provider: "PPV", providerSourceRef: "pizarramx:v1~m~old" },
+    { provider: "PPV", url: "https://pizarramx.com.mx/live.m3u8" },
+    { provider: "PPV", embedUrl: "https://pizarramx.com.mx/envivo" },
+  ];
+  for (const source of variants) {
+    assert.equal(isRetiredSource(source), true);
+    const input = { updatedAt: "now", catalogCounts: { pizarramx: 2, ppv: 1 }, games: [
+      { id: "old", sources: [source] }, { id: "mixed", provider: "pizarramx", sources: [source, independent] },
+      { id: "scheduled", provider: "espn", sources: [] },
+    ] };
+    const result = deriveRetiredSourceSnapshot(input, { updatedAt: "now", pizarramxError: "", pizarramxRetainedGameCount: 2 });
+    assert.deepEqual(result.feed.games.map((game) => game.id), ["mixed", "scheduled"]);
+    assert.deepEqual(result.feed.games[0].sources, [independent]);
+    assert.equal("pizarramx" in result.feed.catalogCounts, false);
+    assert.equal("pizarramxError" in result.status, false);
+    assert.equal("pizarramxRetainedGameCount" in result.status, false);
+  }
+});

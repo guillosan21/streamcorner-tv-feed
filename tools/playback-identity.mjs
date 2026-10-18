@@ -1,10 +1,12 @@
-// Pizarra MX sources intentionally publish opaque refs instead of transport
-// URLs. Keep the resolver identity stable across harmless display changes.
-export const PIZARRAMX_SOURCE_REF_PATTERN = /^pizarramx:v1~[em]~[0-9a-f]{64}~[0-9a-f]{64}$/;
-
-export function isValidPizarraMxSourceRef(value) {
-  return PIZARRAMX_SOURCE_REF_PATTERN.test(String(value || ""));
+export function isRetiredPizarraSource(source) {
+  if ([source?.provider, source?.embedProvider, source?.name].some((value) =>
+    String(value || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "").startsWith("pizarra"))) return true;
+  if (String(source?.providerSourceRef || "").trim().toLowerCase().startsWith("pizarramx:")) return true;
+  return [source?.url, source?.embedUrl, source?.headers?.Referer, source?.headers?.Origin].some((value) => {
+    try { return new URL(String(value || "")).hostname.toLowerCase().includes("pizarra"); } catch { return false; }
+  });
 }
+
 const TIMSTREAMS_PLAYER_HOSTS = new Set(["exmxbxe.cfd", "epiembeds.online", "ehgembxe.cfd"]);
 export function isValidTimStreamsSourceRef(value) {
   const ref = String(value || "");
@@ -30,6 +32,7 @@ export function isOpaqueTimStreamsSource(source) {
 }
 
 export function feedSourceKey(source) {
+  if (isRetiredPizarraSource(source)) return "";
   const providerSourceRef = String(source?.providerSourceRef || "");
   if (source?.provider === "TimStreams" && (source?.providerGeneration === "v2" || providerSourceRef.trim().startsWith("timstreams:v2~")) && !isOpaqueTimStreamsSource(source)) return "";
   if (providerSourceRef) {
@@ -46,13 +49,7 @@ export function playbackIdentity(source) {
   if (source?.provider === "TimStreams" && source?.providerSourceRef) {
     return isOpaqueTimStreamsSource(source) ? `resolver:${source.providerSourceRef}:generation:v2` : "";
   }
-  const provider = String(source?.provider || "").trim();
-  const rawRef = String(source?.providerSourceRef || "");
-  if (provider === "Pizarra MX") {
-    if (rawRef !== rawRef.trim() || !isValidPizarraMxSourceRef(rawRef)) return "";
-    const generation = String(source?.providerGeneration || "v1").trim() || "v1";
-    return `resolver:${rawRef}:generation:${generation}`;
-  }
+  if (isRetiredPizarraSource(source)) return "";
   const endpoint = String(source?.url || source?.embedUrl || "").trim();
   return endpoint ? `endpoint:${endpoint}` : "";
 }

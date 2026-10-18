@@ -1,7 +1,9 @@
+import { isRetiredPizarraSource } from "./playback-identity.mjs";
 import { isDeepStrictEqual } from "node:util";
 import { isSportsUpaAdminSource } from "./sportsupa.mjs";
 
 export function isRetiredSource(source) {
+  if (isRetiredPizarraSource(source)) return true;
   const labels = [source?.provider, source?.embedProvider, String(source?.name || "").split("•", 1)[0]];
   if (labels.some((label) => String(label || "").trim().toLowerCase() === "streamed")) return true;
   if (String(source?.providerSourceRef || "").toLowerCase().startsWith("streamed:")) return true;
@@ -25,9 +27,11 @@ export function deriveRetiredSourceSnapshot(feed, status) {
   let removedSourceCount = 0;
   let removedGameCount = 0;
   const removedSourceProviderCounts = {};
+  const cardsWithRetiredPizarra = new Set();
 
   for (const game of Array.isArray(sanitizedFeed.games) ? sanitizedFeed.games : []) {
     if (!Array.isArray(game.sources)) continue;
+    if (game.sources.some(isRetiredPizarraSource)) cardsWithRetiredPizarra.add(game);
     game.sources = game.sources.filter((source) => {
       if (!isRetiredSource(source)) return true;
       removedSourceCount += 1;
@@ -40,7 +44,8 @@ export function deriveRetiredSourceSnapshot(feed, status) {
   // The previous snapshot already removed sources, so its retired-only cards are empty.
   // Keep unrelated source-less schedule rows and mixed-provider games intact.
   sanitizedFeed.games = sanitizedFeed.games.filter((game) => {
-    const retiredOnlyCard = String(game?.provider || "").toLowerCase() === "streamed" &&
+    const retiredOnlyCard = (String(game?.provider || "").toLowerCase() === "streamed" ||
+      isRetiredPizarraSource({ provider: game?.provider }) || cardsWithRetiredPizarra.has(game)) &&
       Array.isArray(game.sources) && game.sources.length === 0;
     if (retiredOnlyCard) removedGameCount += 1;
     return !retiredOnlyCard;
@@ -53,19 +58,24 @@ export function deriveRetiredSourceSnapshot(feed, status) {
     delete sanitizedFeed.catalogCounts.streamed;
   }
 
+  if (sanitizedFeed.catalogCounts) delete sanitizedFeed.catalogCounts.pizarramx;
+  delete sanitizedStatus.pizarramxError;
+  delete sanitizedStatus.pizarramxRetainedGameCount;
   delete sanitizedStatus.streamedErrors;
   delete sanitizedStatus.streamedCatalogCounts;
   const providerQualityCounts = sanitizedStatus.qualityFilteredSourcesByProvider;
-  if (providerQualityCounts && Object.hasOwn(providerQualityCounts, "Streamed")) {
-    const retiredQualityCount = Number(providerQualityCounts.Streamed);
-    delete providerQualityCounts.Streamed;
-    if (Object.hasOwn(sanitizedStatus, "qualityFilteredSourceCount") && Number.isFinite(retiredQualityCount)) {
-      const totalQualityCount = Number(sanitizedStatus.qualityFilteredSourceCount);
-      if (!Number.isFinite(totalQualityCount) || totalQualityCount < retiredQualityCount) {
-        throw new Error("Streamed quality-filter count exceeds the total quality-filter count");
+  for (const retiredProvider of ["Streamed", "Pizarra MX"]) {
+    if (providerQualityCounts && Object.hasOwn(providerQualityCounts, retiredProvider)) {
+      const retiredQualityCount = Number(providerQualityCounts[retiredProvider]);
+      delete providerQualityCounts[retiredProvider];
+      if (Object.hasOwn(sanitizedStatus, "qualityFilteredSourceCount") && Number.isFinite(retiredQualityCount)) {
+        const totalQualityCount = Number(sanitizedStatus.qualityFilteredSourceCount);
+        if (!Number.isFinite(totalQualityCount) || totalQualityCount < retiredQualityCount) {
+          throw new Error("Retired provider quality-filter count exceeds the total quality-filter count");
+        }
+        sanitizedStatus.qualityFilteredSourceCount = totalQualityCount - retiredQualityCount;
       }
-      sanitizedStatus.qualityFilteredSourceCount = totalQualityCount - retiredQualityCount;
-    }
+  }
   }
 
   return {
