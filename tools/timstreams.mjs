@@ -4,7 +4,7 @@ import { isIP } from "node:net";
 const TIMSTREAMS_API = "https://timst.top/api";
 const TIMSTREAMS_SITE = "https://timst.top/";
 const TIMSTREAMS_API_ORIGINS = ["https://timst.top", "https://timst.cfd", "https://timstreams.st"];
-const TIMSTREAMS_PLAYER_HOSTS = new Set(["exmxbxe.cfd", "epiembeds.online"]);
+const TIMSTREAMS_PLAYER_HOSTS = new Set(["exmxbxe.cfd", "epiembeds.online", "ehgembxe.cfd"]);
 const TIMSTREAMS_TIME_ZONE = "America/New_York";
 
 function safeTimPlayerUrl(value) {
@@ -159,20 +159,36 @@ function safeTimPlayerResponseUrl(value, expectedUrl, eventSlug) {
   } catch { return ""; }
 }
 
-async function fetchTimPlayerPage(value, headers, eventSlug) {
+// Request-local proof only: one same-host HTTP redirect from the exact catalog URL.
+function safeTimOpaqueRedirectUrl(value, fromUrl, firstUrl, hop) {
+  const first = safeTimPlayerUrl(firstUrl);
+  if (!first || fromUrl !== first || hop !== 0 || new URL(first).hostname !== "ehgembxe.cfd") return "";
+  try {
+    const actual = new URL(value);
+    if (actual.protocol !== "https:" || actual.host !== "ehgembxe.cfd" || actual.username || actual.password ||
+        actual.search || actual.hash || actual.href !== value || actual.pathname.length > 2048 ||
+        !/^\/play\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(actual.pathname)) return "";
+    return actual.href;
+  } catch { return ""; }
+}
+
+async function fetchTimPlayerPage(value, headers, eventSlug,
+  { fetchImpl = fetch, requirePublicUrl = requirePublicHttpsUrl } = {}) {
   const firstUrl = safeTimPlayerUrl(value);
   if (!firstUrl) return null;
   const expected = new URL(firstUrl);
   let current = firstUrl;
+  let opaqueTarget = "";
   for (let hop = 0; hop <= 4; hop += 1) {
-    await requirePublicHttpsUrl(current);
-    const response = await fetch(current, {
+    await requirePublicUrl(current);
+    const response = await fetchImpl(current, {
       headers,
       redirect: "manual",
       signal: AbortSignal.timeout(15_000),
     });
     if (!isRedirect(response)) {
-      const finalUrl = safeTimPlayerResponseUrl(response.url || current, firstUrl, eventSlug);
+      const finalUrl = opaqueTarget && current === opaqueTarget && (response.url || current) === opaqueTarget
+        ? opaqueTarget : safeTimPlayerResponseUrl(response.url || current, firstUrl, eventSlug);
       if (!finalUrl) return null;
       const final = new URL(finalUrl);
       if (final.hostname !== expected.hostname) return null;
@@ -182,11 +198,16 @@ async function fetchTimPlayerPage(value, headers, eventSlug) {
     if (hop === 4) return null;
     const location = response.headers.get("location");
     if (!location) return null;
-    const nextUrl = safeTimPlayerResponseUrl(new URL(location, current).href, firstUrl, eventSlug);
+    const resolved = new URL(location, current).href;
+    // Validate raw Location before URL resolution can erase ports or traversal.
+    const rawTarget = location.startsWith("/") ? expected.origin + location : location;
+    const opaque = safeTimOpaqueRedirectUrl(rawTarget, current, firstUrl, hop);
+    const nextUrl = safeTimPlayerResponseUrl(resolved, firstUrl, eventSlug) || opaque;
     if (!nextUrl) return null;
     const next = new URL(nextUrl);
     if (next.hostname !== expected.hostname) return null;
     current = nextUrl;
+    opaqueTarget = opaque;
   }
   return null;
 }
@@ -267,17 +288,24 @@ function safeWatchUrl(event) {
   }
 }
 
-async function resolveStream(stream, event, verifyLive) {
+async function resolveStream(stream, event, verifyLive, playerFetchOptions) {
   const embedUrl = safeTimPlayerUrl(stream?.url);
   const watchUrl = safeWatchUrl(event);
   if (!embedUrl || !watchUrl || event?.vip === true || stream?.vip === true) return null;
+  if (new URL(embedUrl).hostname === "ehgembxe.cfd") {
+    // This player now bootstraps media in the browser. Publish only its fresh
+    // catalog identity, like upcoming references; Android verifies actual live
+    // media on selection. Never label this declaration as a healthy stream.
+    const source = buildResolvedSource(stream, event, embedUrl);
+    return source ? { ...source, availabilityEvidence: "provider-reported" } : null;
+  }
   let manifestUrl = "";
   let manifestHeaders = { Referer: TIMSTREAMS_SITE };
   if (verifyLive) {
     try {
       const response = await fetchTimPlayerPage(embedUrl, {
         Accept: "text/html", Referer: TIMSTREAMS_SITE, "User-Agent": "StreamCorner-TV-Feed/1.13",
-      }, event?.url);
+      }, event?.url, playerFetchOptions);
       if (!response?.ok) return null;
       manifestUrl = decodeEmbedPayload(await response.text());
       if (!manifestUrl) return null;
@@ -434,17 +462,18 @@ export async function fetchTimStreamsGames(now, estimatedDurationSeconds) {
     return {
       games,
       catalogCount: events.length,
-      resolvedStreamCount: games.flatMap((game) => game.sources).length,
+      resolvedStreamCount: games.flatMap((game) => game.sources).filter((source) => source.availabilityEvidence !== "provider-reported").length,
+      providerReportedStreamCount: games.flatMap((game) => game.sources).filter((source) => source.availabilityEvidence === "provider-reported").length,
       apiUrl,
       error: "",
     };
   } catch (error) {
-    return { games: [], catalogCount: 0, resolvedStreamCount: 0, apiUrl: `${TIMSTREAMS_API}/live-upcoming`, error: String(error) };
+    return { games: [], catalogCount: 0, resolvedStreamCount: 0, providerReportedStreamCount: 0, apiUrl: `${TIMSTREAMS_API}/live-upcoming`, error: String(error) };
   }
 }
 
 export const __testing = {
   parseWallClock, decodeEmbedPayload, safeWatchUrl, safeTimPlayerUrl, canonicalLeague,
   buildResolvedSource, timProviderSourceRef,
-  fetchTimCatalog, resolveStream, safeTimPlayerResponseUrl, apiOrigins: TIMSTREAMS_API_ORIGINS,
+  fetchTimCatalog, fetchTimPlayerPage, resolveStream, safeTimPlayerResponseUrl, safeTimOpaqueRedirectUrl, apiOrigins: TIMSTREAMS_API_ORIGINS,
 };

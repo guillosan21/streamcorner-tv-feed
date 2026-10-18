@@ -5,7 +5,7 @@ export const PIZARRAMX_SOURCE_REF_PATTERN = /^pizarramx:v1~[em]~[0-9a-f]{64}~[0-
 export function isValidPizarraMxSourceRef(value) {
   return PIZARRAMX_SOURCE_REF_PATTERN.test(String(value || ""));
 }
-const TIMSTREAMS_PLAYER_HOSTS = new Set(["exmxbxe.cfd", "epiembeds.online"]);
+const TIMSTREAMS_PLAYER_HOSTS = new Set(["exmxbxe.cfd", "epiembeds.online", "ehgembxe.cfd"]);
 export function isValidTimStreamsSourceRef(value) {
   const ref = String(value || "");
   if (!ref.startsWith("timstreams:") || ref.length > 191) return false;

@@ -2,6 +2,64 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { __testing } from "./timstreams.mjs";
+test("browser-only catalog sources are reported references, not verified transports", async () => {
+  const stream = { name: "ESPN", url: "https://ehgembxe.cfd/player?private=transient" };
+  const event = { url: "utah-utes-v-colorado-buffaloes-401856833" };
+  const options = { requirePublicUrl: async () => {}, fetchImpl: async () => { throw new Error("New host must resolve on device"); } };
+  const source = await __testing.resolveStream(stream, event, true, options);
+  assert.equal(source.availabilityEvidence, "provider-reported");
+  assert.equal(source.url, ""); assert.equal(source.embedUrl, ""); assert.deepEqual(source.headers, {});
+  assert.ok(source.providerSourceRef.startsWith("timstreams:v2~"));
+  assert.ok(!JSON.stringify(source).includes("private"));
+  for (const [s, e] of [[{ ...stream, vip: true }, event], [stream, { ...event, vip: true }],
+    [{ ...stream, url: "https://ehgembxe.cfd/play/header..iv.ciphertext.tag" }, event],
+    [stream, { url: "a".repeat(180) }],
+  ]) assert.equal(await __testing.resolveStream(s, e, true, options), null);
+  let requests = 0;
+  assert.equal(await __testing.resolveStream({ ...stream, url: "https://exmxbxe.cfd/player" }, event, true, {
+    requirePublicUrl: async () => {}, fetchImpl: async url => { requests++; return { status: 502, ok: false, url }; },
+  }), null);
+  assert.equal(requests, 1);
+});
+test("actual player fetch keeps raw opaque Location guards and exact one-hop proof", async () => {
+  const first = "https://ehgembxe.cfd/player?session=fixture";
+  const target = "https://ehgembxe.cfd/play/header..iv.ciphertext.tag";
+  for (const location of [target, target.replace("https://ehgembxe.cfd", ""),
+    target.replace(".cfd/", ".cfd:443/"), target.replace("/play/", "/play/../play/"),
+    target + "?unexpected=fixture", target.replace(".cfd/", ".cfd.evil.example/"),
+  ]) {
+    const calls = [];
+    const result = await __testing.fetchTimPlayerPage(first, {}, "selected-event", {
+      requirePublicUrl: async () => {},
+      fetchImpl: async (url, options) => {
+        calls.push(url);
+        assert.equal(options.redirect, "manual");
+        return calls.length === 1
+          ? { status: 302, url, headers: new Headers({ Location: location }), body: { cancel: async () => {} } }
+          : { status: 200, url, headers: new Headers() };
+      },
+    });
+    const accepted = location === target || location.startsWith("/play/header");
+    assert.equal(Boolean(result), accepted);
+    assert.deepEqual(calls, accepted ? [first, target] : [first]);
+  }
+});
+test("rotated player host keeps opaque redirect proof request-local", () => {
+  const first = "https://ehgembxe.cfd/player?session=fixture";
+  const target = "https://ehgembxe.cfd/play/header..iv.ciphertext.tag";
+  assert.equal(__testing.safeTimPlayerUrl(first), first);
+  assert.equal(__testing.safeTimPlayerUrl(target), "");
+  assert.equal(__testing.safeTimPlayerResponseUrl(target, first, "selected-event"), "");
+  assert.equal(__testing.safeTimOpaqueRedirectUrl(target, first, first, 0), target);
+  assert.equal(__testing.safeTimOpaqueRedirectUrl(target, first, first, 1), "");
+  assert.equal(__testing.safeTimOpaqueRedirectUrl(target, first.split("?")[0], first, 0), "");
+  for (const value of [target + "?token=fixture", target + "#fragment", target + "/extra",
+    target.replace("https:", "http:"), target.replace(".cfd/", ".cfd.evil.example/"),
+    target.replace("ehgembxe.cfd", "user@ehgembxe.cfd"), target.replace(".cfd/", ".cfd:443/"),
+    target.replace("header", "%68eader"), target.replace("header", "a".repeat(2048)),
+    target.replace("/play/", "/play/../play/"), target.replace("ehgembxe.cfd", "exmxbxe.cfd"),
+  ]) assert.equal(__testing.safeTimOpaqueRedirectUrl(value, first, first, 0), "");
+});
 test("TimStreams mirrors Android NFL and MLB event-bound redirect contracts", () => {
   const initial = "https://exmxbxe.cfd/player";
   const accepted = [

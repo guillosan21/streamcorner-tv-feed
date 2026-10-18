@@ -3,6 +3,13 @@ import assert from "node:assert/strict";
 import { __testing } from "./timstreams.mjs";
 import { isValidTimStreamsSourceRef, isOpaqueTimStreamsSource, playbackIdentity, deduplicatePlaybackSources } from "./playback-identity.mjs";
 const source = () => __testing.buildResolvedSource({ name: "DAZN Canada" }, { url: "czechia-v-spain-unl-401861118" }, "https://exmxbxe.cfd/he5phqny-6982?private=transient");
+test("rotated catalog host survives real publication dedup without opaque player URLs", () => {
+  const row = __testing.buildResolvedSource({ name: "ESPN" }, { url: "selected-event" }, "https://ehgembxe.cfd/player");
+  assert.ok(isOpaqueTimStreamsSource(row));
+  assert.equal(deduplicatePlaybackSources([row, { ...row }]).length, 1);
+  const bad = __testing.buildResolvedSource({ name: "ESPN" }, { url: "selected-event" }, "https://ehgembxe.cfd.evil.test/player");
+  assert.ok(!bad || !isOpaqueTimStreamsSource(bad));
+});
 test("Tim v2 sources survive deduplication without publishing transport state", () => {
   const row = source();
   assert.ok(isValidTimStreamsSourceRef(row.providerSourceRef));
