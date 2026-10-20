@@ -805,7 +805,7 @@ try {
       return sides.length === 2 && other.length === 2 &&
         ((similarTeam(sides[0], other[0]) && similarTeam(sides[1], other[1])) ||
          (similarTeam(sides[0], other[1]) && similarTeam(sides[1], other[0])));
-  });
+  }, now);
   let espnBroadcastSourceCount = 0;
   const channelGames = games.filter((game) => game.is24x7 && game.sources?.some((source) => source.provider === "DLStreams"));
   for (const game of games) {

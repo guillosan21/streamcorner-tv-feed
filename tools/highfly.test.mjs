@@ -50,8 +50,42 @@ test("require unique official ESPN match and retain its kickoff, scores and iden
   assert.equal(official.id, "espn-nfl-123");
   assert.equal(official.sources.length, 1);
   assert.equal(attachAddonSources([candidate], [{ ...official, scoreboardEventId: "" }], () => true).unmatched, 1);
-  assert.equal(attachAddonSources([candidate], [{ ...official, status: "upcoming" }], () => true).unmatched, 1);
+  assert.equal(attachAddonSources([candidate], [{ ...official, status: "upcoming" }], () => true,
+    new Date("2026-08-29T20:00:00Z")).unmatched, 0);
   assert.equal(attachAddonSources([candidate], [official, { ...official, id: "second-game" }], () => true).ambiguous, 1);
+});
+
+test("early sources attach to unique upcoming ESPN fixture without changing game status", () => {
+  const now = new Date("2026-10-20T16:30:00Z");
+  const source = {provider:"Sports Streams",name:"Sports Streams • Leaf",url:"https://cdn.test/live.m3u8"};
+  const event = {title:"Home vs Away",sources:[source]};
+  const official = {id:"espn-123",scoreboardEventId:"espn-123",status:"upcoming",
+    startsAt:"2026-10-20T16:45:00Z",sources:[],homeScore:"0"};
+  assert.deepEqual(attachAddonSources([event],[official],()=>true,now),{ambiguous:0,unmatched:0});
+  assert.equal(official.status,"upcoming");
+  assert.equal(official.startsAt,"2026-10-20T16:45:00Z");
+  assert.equal(official.homeScore,"0");
+  assert.deepEqual(official.sources,[{...source,availableBeforeKickoff:true}]);
+  assert.equal(source.availableBeforeKickoff,undefined);
+  const hoursEarly = {...official,startsAt:"2026-10-20T23:00:00Z",sources:[]};
+  assert.equal(attachAddonSources([event],[hoursEarly],()=>true,now).unmatched,0);
+  assert.equal(hoursEarly.sources[0].availableBeforeKickoff,true);
+});
+
+test("untimed early sources reject stale, distant, completed, nonofficial and ambiguous fixtures", () => {
+  const now = new Date("2026-10-20T16:30:00Z");
+  const event = {sources:[{provider:"Sports Streams",url:"https://cdn.test/live.m3u8"}]};
+  const official = {scoreboardEventId:"espn-123",status:"upcoming",startsAt:"2026-10-20T16:45:00Z",sources:[]};
+  for(const patch of [{startsAt:"2026-10-19T16:45:00Z"},{startsAt:"2026-10-22T16:45:00Z"},
+    {startsAt:"invalid"},{status:"completed"},{status:"cancelled"},{scoreboardEventId:""},{is24x7:true}]) {
+    const game={...official,...patch,sources:[]};
+    assert.equal(attachAddonSources([event],[game],()=>true,now).unmatched,1);
+    assert.deepEqual(game.sources,[]);
+  }
+  const second={...official,scoreboardEventId:"espn-456",sources:[]};
+  assert.equal(attachAddonSources([event],[official,second],()=>true,now).ambiguous,1);
+  assert.equal(official.sources.length,0);
+  assert.equal(second.sources.length,0);
 });
 
 test("prefer add-on over PPV only with shared playback evidence", async () => {

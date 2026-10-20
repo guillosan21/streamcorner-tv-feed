@@ -102,13 +102,26 @@ function canonicalUrl(value) {
   } catch { return ""; }
 }
 
-export function attachAddonSources(events, games, matchupMatches) {
+export function attachAddonSources(events, games, matchupMatches, now = new Date()) {
+  const nowMillis = now.getTime();
   let ambiguous = 0;
   let unmatched = 0;
   for (const event of events) {
-    const candidates = games.filter((game) => !game.is24x7 && game.status === "live" &&
-      game.scoreboardEventId && Number.isFinite(Date.parse(game.startsAt)) && matchupMatches(game, event));
-    if (candidates.length === 1) candidates[0].sources.push(...event.sources);
+    const candidates = games.filter((game) => {
+      const starts = Date.parse(game.startsAt);
+      // An untimed provider LIVE entry proves source availability, not that the
+      // match has started. Bind it only to one official live game or a nearby
+      // upcoming fixture; do not attach it to a return leg weeks in the future.
+      const eligible = game.status === "live" || (game.status === "upcoming" &&
+        Number.isFinite(nowMillis) && starts >= nowMillis - 15 * 60_000 && starts <= nowMillis + 24 * 60 * 60_000);
+      return !game.is24x7 && eligible && game.scoreboardEventId &&
+        Number.isFinite(starts) && matchupMatches(game, event);
+    });
+    if (candidates.length === 1) {
+      const game = candidates[0];
+      game.sources.push(...event.sources.map(source => game.status === "upcoming"
+        ? { ...source, availableBeforeKickoff: true } : source));
+    }
     else if (candidates.length > 1) ambiguous++;
     else unmatched++;
   }
