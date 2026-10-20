@@ -88,6 +88,22 @@ test("untimed early sources reject stale, distant, completed, nonofficial and am
   assert.equal(second.sources.length,0);
 });
 
+test("official pregame feed lag does not drop sources while the fixture window remains valid", () => {
+  const now=new Date("2026-10-20T17:15:00Z");
+  const event={sources:[{provider:"Sports Streams",url:"https://cdn.test/live.m3u8"}]};
+  const game={scoreboardEventId:"espn-123",status:"upcoming",startsAt:"2026-10-20T16:45:00Z",
+    endsAt:"2026-10-20T20:45:00Z",sources:[]};
+  assert.equal(attachAddonSources([event],[game],()=>true,now).unmatched,0);
+  assert.equal(game.status,"upcoming");
+  assert.equal(game.sources[0].availableBeforeKickoff,true);
+  for(const patch of [{endsAt:"2026-10-20T17:00:00Z"},{endsAt:"invalid"},
+    {startsAt:"2026-10-18T16:45:00Z",endsAt:"2026-10-25T20:45:00Z"}]) {
+    const stale={...game,...patch,sources:[]};
+    assert.equal(attachAddonSources([event],[stale],()=>true,now).unmatched,1);
+    assert.equal(stale.sources.length,0);
+  }
+});
+
 test("prefer add-on over PPV only with shared playback evidence", async () => {
   const addon = { provider: "Sports Streams", url: "https://cdn.test/game.m3u8" };
   const duplicate = { provider: "PPV", url: addon.url };

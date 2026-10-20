@@ -109,11 +109,13 @@ export function attachAddonSources(events, games, matchupMatches, now = new Date
   for (const event of events) {
     const candidates = games.filter((game) => {
       const starts = Date.parse(game.startsAt);
+      const ends = Date.parse(game.endsAt);
       // An untimed provider LIVE entry proves source availability, not that the
       // match has started. Bind it only to one official live game or a nearby
       // upcoming fixture; do not attach it to a return leg weeks in the future.
       const eligible = game.status === "live" || (game.status === "upcoming" &&
-        Number.isFinite(nowMillis) && starts >= nowMillis - 15 * 60_000 && starts <= nowMillis + 24 * 60 * 60_000);
+        Number.isFinite(nowMillis) && starts >= nowMillis - 24 * 60 * 60_000 && starts <= nowMillis + 24 * 60 * 60_000 &&
+        (starts >= nowMillis - 15 * 60_000 || ends > nowMillis));
       return !game.is24x7 && eligible && game.scoreboardEventId &&
         Number.isFinite(starts) && matchupMatches(game, event);
     });
