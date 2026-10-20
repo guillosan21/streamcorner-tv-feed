@@ -4,8 +4,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 const SITE = "https://streamcorner.st/";
-// #001 remains quarantined until its production transport passes playback validation.
-const PROVIDERS = ["admin", "nba", "nfl", "alpha", "beta", "003"];
+// #001 uses the exact versioned native HLS binding, independently verified on Android.
+const PROVIDERS = ["admin", "nba", "nfl", "alpha", "beta", "001", "003"];
 const MAX_ASSET_BYTES = 600_000;
 const MAX_RESPONSE_BYTES = 4_000_000;
 const WORKER_HOST = /^data\.[a-z0-9-]+\.workers\.dev$/;
