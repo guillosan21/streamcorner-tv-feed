@@ -9,23 +9,28 @@ export function isRetiredPizarraSource(source) {
 
 const TIMSTREAMS_PLAYER_HOSTS = new Set(["exmxbxe.cfd", "epiembeds.online", "ehgembxe.cfd"]);
 const STREAMCORNER_INGEST_PATH = /^\/embed\/ingest\/(?:[A-Za-z0-9_-]{1,64}\/){0,3}[A-Za-z0-9_-]{1,128}\/?$/;
+const STREAMCORNER_001_PATH = /^\/embed\/(?:nhl|nfl|mlb|nba|soccer|ucl|efl-league-two|efl-championship)\/[0-9]{4}-[0-9]{2}-[0-9]{2}\/[a-z0-9]+(?:-[a-z0-9]+){1,8}$/;
 
 export function streamCornerIngestPath(value) {
-  if (typeof value !== "string" || value.length > 512) return null;
-  const match = /^streamcorner:v1~([A-Za-z0-9_-]+)$/.exec(value);
+  if (typeof value !== "string" || value.length > 2064) return null;
+  const match = /^streamcorner:(v[123])~([A-Za-z0-9_-]+)$/.exec(value);
   if (!match || match[0] !== value) return null;
-  const bytes = Buffer.from(match[1], "base64url");
+  if (match[2].length > (match[1] === "v3" ? 2048 : 512)) return null;
+  const bytes = Buffer.from(match[2], "base64url");
   const path = bytes.toString("utf8");
-  return bytes.toString("base64url") === match[1] && Buffer.from(path, "utf8").equals(bytes) &&
-    STREAMCORNER_INGEST_PATH.test(path) && path === path.trim() ? path : null;
+  return bytes.toString("base64url") === match[2] && Buffer.from(path, "utf8").equals(bytes) &&
+    (match[1] === "v3" ? path.length <= 1100 && /^https:\/\/amazon\.com\.pandecocogaming\.sbs\/\?p=[A-Za-z0-9_-]{32,1024}={0,2}$/.test(path) :
+      (match[1] === "v2" ? STREAMCORNER_001_PATH : STREAMCORNER_INGEST_PATH).test(path)) && path === path.trim() ? path : null;
 }
 
 export function isNativeStreamCornerSource(source) {
   const path = streamCornerIngestPath(source?.providerSourceRef);
+  const v2 = String(source?.providerSourceRef || "").startsWith("streamcorner:v2~");
+  const v3 = String(source?.providerSourceRef || "").startsWith("streamcorner:v3~");
   return Boolean(path && source.provider === "StreamCorner" && source.embedProvider === "StreamCorner" &&
     String(source.name || "").startsWith("StreamCorner • ") && source.url === "" && !source.clearKey &&
-    source.providerGeneration === "v1" && source.availabilityEvidence === "provider-reported" &&
-    source.embedUrl === `https://embed.st${path}#player=clappr&autoplay=true` &&
+    source.providerGeneration === (v3 ? "v3" : v2 ? "v2" : "v1") && source.availabilityEvidence === "provider-reported" &&
+    source.embedUrl === (v3 ? path : v2 ? `https://taifood-blog.asia${path}` : `https://embed.st${path}#player=clappr&autoplay=true`) &&
     source.headers?.Referer === "https://streamcorner.st/" && Object.keys(source.headers).length === 1);
 }
 
@@ -73,7 +78,7 @@ export function feedSourceKey(source) {
 
 export function playbackIdentity(source) {
   if (isStreamCornerNativeCandidate(source)) {
-    return isNativeStreamCornerSource(source) ? `resolver:${source.providerSourceRef}:generation:v1` : "";
+    return isNativeStreamCornerSource(source) ? `resolver:${source.providerSourceRef}:generation:${source.providerGeneration}` : "";
   }
   if (source?.provider === "TimStreams" && source?.providerSourceRef) {
     return isOpaqueTimStreamsSource(source) ? `resolver:${source.providerSourceRef}:generation:v2` : "";

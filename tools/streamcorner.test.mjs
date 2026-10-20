@@ -5,6 +5,47 @@ import { isNativeStreamCornerSource, streamCornerIngestPath, feedSourceKey, play
 import { inspectStreamCapabilities, sourceProvenanceErrors } from "./scrape-streams.mjs";
 
 const wrapper = "https://rockyembed.st/source/fetch.php?hd=123";
+test("ALPHA and BETA publish exact public wrappers without media or key material", async () => {
+  const page="https://amazon.com.pandecocogaming.sbs/?p="+"a".repeat(495);
+  for(const provider of ["alpha","beta"]){
+    const row=await resolveStreamCornerIngestSource(provider,{embed_url:page,source_name:"One"},0,
+      async()=>assert.fail("Publisher must not fetch private player config"));
+    assert.ok(isNativeStreamCornerSource(row));
+    assert.equal(row.providerGeneration,"v3");
+    assert.equal(streamCornerIngestPath(row.providerSourceRef),page);
+    assert.equal(playbackIdentity(row),feedSourceKey(row));
+    assert.equal(row.clearKey,"");assert.equal(row.url,"");
+    assert.deepEqual(await inspectStreamCapabilities(row,"streamcorner"),row);
+    assert.deepEqual(sourceProvenanceErrors([{id:provider,sources:[row]}]),[]);
+    for(const patch of [{clearKey:"private"},{url:"https://cdn.example/live.mpd"},{providerGeneration:"v1"},
+      {embedUrl:page+"&extra=1"},{providerSourceRef:row.providerSourceRef+"="},
+      {headers:{Referer:"https://streamcorner.st/",Authorization:"private"}}]) {
+      assert.equal(isNativeStreamCornerSource({...row,...patch}),false);
+    }
+    for(const bad of [page+" ",page+"#x",page+"&extra=1",page.replace(".sbs/",".sbs.evil.test/"),
+      page.replace("/?p=","/?p=%61")]) assert.equal(await resolveStreamCornerIngestSource(provider,{embed_url:bad}),null);
+    assert.equal(await resolveStreamCornerIngestSource(provider,{embed_url:page,stream_keys:{secret:"key"}}),null);
+  }
+});
+test("001 catalog emits only exact versioned dated public player identities", async () => {
+  const page = "https://taifood-blog.asia/embed/nhl/2026-10-19/pit-uta";
+  const row = await resolveStreamCornerIngestSource("001", {embed_url:page,source_name:"Utah 16"}, 0,
+    async () => assert.fail("No speculative page/media fetch for catalog identity"));
+  assert.ok(isNativeStreamCornerSource(row));
+  assert.equal(row.providerGeneration, "v2");
+  assert.equal(playbackIdentity(row), feedSourceKey(row));
+  assert.equal(row.name, "StreamCorner • #001 Utah 16");
+  assert.equal(row.maxHeight, undefined);
+  assert.deepEqual(await inspectStreamCapabilities(row, "streamcorner"), row);
+  assert.deepEqual(sourceProvenanceErrors([{id:"001",sources:[row]}]), []);
+  assert.equal(isNativeStreamCornerSource({...row,providerGeneration:"v1"}),false);
+  assert.equal(isNativeStreamCornerSource({...row,embedUrl:page+"?token=x"}),false);
+  for (const embed_url of [page+" ",page+"?token=x",page+"#other",page.replace("taifood-blog.asia","taifood-blog.asia.evil.test"),page.replace("pit-uta","../other")]) {
+    assert.equal(await resolveStreamCornerIngestSource("001", {embed_url}),null);
+  }
+  assert.equal(await resolveStreamCornerIngestSource("alpha", {embed_url:page}),null);
+  assert.equal(await resolveStreamCornerIngestSource("001", {embed_url:page,stream_keys:{key:"not allowed"}}),null);
+});
 const ingestPath = "/embed/ingest/abc/channel-1";
 const ingestTarget = `https://embed.st${ingestPath}#player=clappr&autoplay=true`;
 const wrapperHtml = target => `<div id="player"></div><script>

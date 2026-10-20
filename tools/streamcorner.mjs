@@ -4,7 +4,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 const SITE = "https://streamcorner.st/";
-const PROVIDERS = ["admin", "nba", "nfl", "alpha", "beta", "001", "003"];
+// #001 remains quarantined until its production transport passes playback validation.
+const PROVIDERS = ["admin", "nba", "nfl", "alpha", "beta", "003"];
 const MAX_ASSET_BYTES = 600_000;
 const MAX_RESPONSE_BYTES = 4_000_000;
 const WORKER_HOST = /^data\.[a-z0-9-]+\.workers\.dev$/;
@@ -135,6 +136,25 @@ function ingestBootstrapPayload(html) {
 /** Read only the verified 003 wrapper; never execute its JavaScript or follow redirects. */
 export async function resolveStreamCornerIngestSource(provider, source, index = 0, fetcher = fetch) {
   const wrapper = source?.embed_url;
+  if (["alpha", "beta"].includes(provider) && typeof wrapper === "string" && wrapper.length <= 1100 &&
+      /^https:\/\/amazon\.com\.pandecocogaming\.sbs\/\?p=[A-Za-z0-9_-]{32,1024}={0,2}$/.test(wrapper) &&
+      wrapper === wrapper.trim() && !source.stream_url && !source.stream_keys) {
+    const channel = String(source.source_name || `Source ${index + 1}`).trim().slice(0, 70);
+    return {provider:"StreamCorner", embedProvider:"StreamCorner", name:`StreamCorner • ${provider.toUpperCase()} ${channel}`,
+      url:"", embedUrl:wrapper, clearKey:"", headers:{Referer:SITE},
+      providerSourceRef:`streamcorner:v3~${Buffer.from(wrapper,"utf8").toString("base64url")}`,
+      providerGeneration:"v3", availabilityEvidence:"provider-reported"};
+  }
+  if (provider === "001" && typeof wrapper === "string" &&
+      /^https:\/\/taifood-blog\.asia\/embed\/(?:nhl|nfl|mlb|nba|soccer|ucl|efl-league-two|efl-championship)\/[0-9]{4}-[0-9]{2}-[0-9]{2}\/[a-z0-9]+(?:-[a-z0-9]+){1,8}$/.test(wrapper) &&
+      wrapper === wrapper.trim() && !source.stream_url && !source.stream_keys) {
+    const path = new URL(wrapper).pathname;
+    const channel = String(source.source_name || `Source ${index + 1}`).trim().slice(0, 70);
+    return {provider: "StreamCorner", embedProvider: "StreamCorner", name: `StreamCorner • #001 ${channel}`,
+      url: "", embedUrl: wrapper, clearKey: "", headers: {Referer: SITE},
+      providerSourceRef: `streamcorner:v2~${Buffer.from(path, "utf8").toString("base64url")}`,
+      providerGeneration: "v2", availabilityEvidence: "provider-reported"};
+  }
   if (provider !== "003" || typeof wrapper !== "string" ||
       wrapper !== wrapper.trim() ||
       !/^https:\/\/rockyembed\.st\/source\/fetch\.php\?hd=[0-9]+$/.test(wrapper) ||

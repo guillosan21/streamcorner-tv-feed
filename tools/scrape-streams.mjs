@@ -399,7 +399,9 @@ export function sourceProvenanceErrors(rows) {
     for (const source of game.sources || []) {
       const provider = String(source.provider || "");
       const embedProvider = String(source.embedProvider || "");
-      const inferred = inferredWebProvider(source.embedUrl);
+      // The host is shared with PPV. Only the independently validated exact
+      // versioned StreamCorner catalog binding overrides that generic heuristic.
+      const inferred = isNativeStreamCornerSource(source) ? "StreamCorner" : inferredWebProvider(source.embedUrl);
       const rawProviderRef = String(source.providerSourceRef || "");
       if (isRetiredSource(source)) {
         errors.push(`${game.id}: retired source cannot be published`);
@@ -420,7 +422,7 @@ export function sourceProvenanceErrors(rows) {
         errors.push(`${game.id}: TimStreams source must be an exact catalog ref without published transport state`);
       }
       if (inferred && embedProvider !== inferred) {
-        errors.push(`${game.id}: ${source.embedUrl} has embedProvider=${embedProvider || "<empty>"}, expected ${inferred}`);
+        errors.push(`${game.id}: source has embedProvider=${embedProvider || "<empty>"}, expected ${inferred}`);
       }
       if (!source.url && inferred && provider !== inferred) {
         errors.push(`${game.id}: web source provider=${provider || "<empty>"}, expected ${inferred}`);
