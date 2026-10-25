@@ -22,12 +22,14 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
+  # Isolate feed publishing from the orphaned legacy Pages concurrency queue.
+  group: streamcorner-feed-publisher
   cancel-in-progress: false
 
 jobs:
   update-and-deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
