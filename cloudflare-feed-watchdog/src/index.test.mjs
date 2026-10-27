@@ -74,6 +74,30 @@ function recentCompletedRun() {
   });
 }
 
+test("orphaned waiting runs cannot suppress a stale-feed repair forever", async () => {
+  const { fetchImpl, calls } = stubFetch([
+    staleStatus(),
+    response({ workflow_runs: [
+      { status: "waiting", created_at: new Date(NOW - 3 * 24 * 60 * 60_000).toISOString() },
+      { status: "completed", updated_at: new Date(NOW - 15 * 60_000).toISOString() },
+    ] }),
+    response(null, 204),
+  ]);
+  const result = await runWatchdog(ENV, { fetchImpl, now: () => NOW });
+  assert.equal(result.action, "dispatched");
+  assert.equal(calls.length, 3);
+});
+
+test("recent waiting run still prevents overlapping publication", async () => {
+  const { fetchImpl, calls } = stubFetch([
+    staleStatus(),
+    response({ workflow_runs: [{ status: "waiting", created_at: new Date(NOW - 29 * 60_000).toISOString() }] }),
+  ]);
+  const result = await runWatchdog(ENV, { fetchImpl, now: () => NOW });
+  assert.equal(result.reason, "workflow-run-active");
+  assert.equal(calls.length, 2);
+});
+
 function assertSafeDiagnostic(result, expectedKeys = ["action", "reason", "stage"]) {
   assert.deepEqual(Object.keys(result).sort(), [...expectedKeys].sort());
   assert.equal(typeof result.stage, "string");

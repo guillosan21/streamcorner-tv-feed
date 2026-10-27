@@ -389,7 +389,18 @@ export async function runWatchdog(env, {
     return diagnostic("github-runs", "skipped", "github-runs-response-invalid");
   }
 
-  const activeRun = runsPayload.workflow_runs.find((run) => {
+  // The publisher has a 20-minute job deadline. A legacy environment approval
+  // can nevertheless remain "waiting" indefinitely without ever starting it.
+  // Such orphaned runs must not suppress repairs in the new publisher group.
+  // Missing/future timestamps remain fail-closed rather than guessing inactivity.
+  const blockingRuns = runsPayload.workflow_runs.filter((run) => {
+    const status = typeof run?.status === "string" ? run.status.toLowerCase() : "";
+    // Never disregard an actually queued/running job based on age alone.
+    if (!["waiting", "pending", "requested"].includes(status)) return true;
+    const createdAt = parseUpdatedAt(run.created_at);
+    return createdAt === null || nowMs - createdAt <= 30 * 60_000;
+  });
+  const activeRun = blockingRuns.find((run) => {
     const status = typeof run?.status === "string" ? run.status.toLowerCase() : "";
     return ACTIVE_RUN_STATUSES.has(status);
   });
@@ -397,7 +408,7 @@ export async function runWatchdog(env, {
     return diagnostic("github-runs", "skipped", "workflow-run-active");
   }
 
-  const latestRun = runsPayload.workflow_runs[0];
+  const latestRun = blockingRuns[0];
   if (latestRun) {
     const runStatus = typeof latestRun.status === "string" ? latestRun.status.toLowerCase() : "";
     if (runStatus !== "completed") {

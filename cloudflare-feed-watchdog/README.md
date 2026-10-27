@@ -36,6 +36,11 @@ Tests cover fresh and stale feeds, an active run, the dispatch cooldown, GitHub 
 
 ## Behavior and limits
 
+- Orphaned `waiting`, `pending`, or `requested` runs older than 30 minutes are
+  ignored when checking for active work. Missing/future timestamps still block;
+  queued and running jobs always block regardless of age. This prevents legacy
+  deployment approval states from disabling feed repairs indefinitely without
+  assuming that a real running job has stopped.
 - An invalid or unavailable feed status fails closed: the Worker skips dispatch rather than guessing that the feed is stale.
 - For `guillosan21/streamcorner-tv-feed`, the Worker makes one unauthenticated workflow-runs GET because the repository is public. Other configured repositories use the token for that GET. Any non-success response, including 401, 403, or 429, fails closed without a retry. The workflow dispatch request always uses the configured token.
 - An unavailable or rate-limited Actions API also skips dispatch. GitHub remains responsible for the actual run and Pages deployment.
