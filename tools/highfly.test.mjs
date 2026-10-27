@@ -1,6 +1,62 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addonSources, fetchHighflyGames, attachAddonSources, playbackEvidence, samePlayback, preferAddonOverPpv } from "./highfly.mjs";
+import { addonApiConfiguration, addonSources, fetchHighflyGames, attachAddonSources, playbackEvidence, samePlayback, preferAddonOverPpv } from "./highfly.mjs";
+
+const installationId = "synthetic-installation.identifier+private";
+const installationPath = Buffer.from(JSON.stringify({ freeUserId: installationId })).toString("base64url");
+const installationUrl = `https://sports.highfly.to/${installationPath}/manifest.json`;
+
+test("private installation uses only the configured API path and excludes credential-bearing output", async () => {
+  const calls = [];
+  const result = await fetchHighflyGames(new Date(), async (url, options) => {
+    calls.push(url);
+    assert.equal(options.redirect, "error");
+    assert.ok(url.startsWith(installationUrl.replace("/manifest.json", "/")));
+    return { ok: true, json: async () => url.includes("/stream/") ? { streams: [
+      { name: "Leaf", url: "https://cdn.test/live.m3u8?ft=media-token" },
+      { name: "private query", url: `https://cdn.test/live.m3u8?id=${encodeURIComponent(installationId)}` },
+      { name: "100% HD", url: `https://cdn.test/encoded.m3u8?id=${installationId.replace("+", "%2b")}` },
+      { name: "100% HD nested", url: `https://cdn.test/nested.m3u8?id=${installationId.replace("+", "%252b")}` },
+      { name: "private path", url: `https://cdn.test/${installationPath}/live.m3u8` },
+      { name: "private header", url: "https://cdn.test/header.m3u8", behaviorHints: { proxyHeaders: { request: { Referer: installationUrl } } } },
+      { name: "Premium", title: "Upgrade", url: "https://cdn.test/premium.m3u8" },
+      { name: "Premium", url: "https://cdn.test/premium-only.m3u8" },
+      { name: "Setup", url: "https://cdn.test/setup.m3u8" },
+    ] } : { metas: url.includes("skip=") ? [] : [
+      { id: "streamed:test", type: "sport", name: "Home vs Away", releaseInfo: "LIVE" },
+    ] } };
+  }, { manifestUrl: installationUrl });
+  assert.equal(calls.length, 3);
+  assert.equal(result.games.length, 1);
+  assert.equal(result.games[0].sources.length, 1);
+  assert.equal(result.games[0].sources[0].url, "https://cdn.test/live.m3u8?ft=media-token");
+  assert.ok(!JSON.stringify(result).includes(installationId));
+  assert.ok(!JSON.stringify(result).includes(installationPath));
+});
+
+test("invalid installation configuration fails closed without requests or credential diagnostics", async () => {
+  assert.equal(addonApiConfiguration().base, "https://sportsfree-us2.highfly.dev");
+  for (const manifestUrl of [installationUrl.replace("https:", "http:"),
+    installationUrl.replace("sports.highfly.to", "sports.highfly.to.evil.test"),
+    installationUrl.replace("sports.highfly.to", "user@sports.highfly.to"),
+    installationUrl + "?secret=private", installationUrl + "#fragment",
+    "https://sports.highfly.to/bm90LWpzb24/manifest.json",
+    "https://sports.highfly.to/eyJmcmVlVXNlcklkIjoiIn0/manifest.json"]) {
+    const result = await fetchHighflyGames(new Date(), async () => { assert.fail("must not fetch"); }, { manifestUrl });
+    assert.deepEqual(result.errors, ["Sports Streams installation configuration is invalid"]);
+  }
+  const result = await fetchHighflyGames(new Date(), async () => { throw new Error(installationUrl); }, { manifestUrl: installationUrl });
+  assert.deepEqual(result.errors, ["Sports Streams catalog request failed"]);
+});
+
+test("reinstall placeholder produces an actionable safe provider diagnostic", async () => {
+  const result = await fetchHighflyGames(new Date(), async (url) => ({ ok: true, json: async () =>
+    url.includes("/stream/") ? { streams: [{ name: "Please reinstall the addon", url: "https://example.test/configure" }] } :
+    { metas: url.includes("skip=") ? [] : [{ id: "streamed:a", name: "A vs B", type: "sport", releaseInfo: "LIVE" }] }
+  }), { manifestUrl: "" });
+  assert.deepEqual(result.games, []);
+  assert.deepEqual(result.errors, ["Sports Streams requires verified installation configuration"]);
+});
 
 test("accept native streams with original provider labels; reject upsells, insecure URLs and duplicates", () => {
   const result = addonSources([

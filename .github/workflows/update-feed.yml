@@ -61,6 +61,7 @@ jobs:
           APP_FEED_OUTPUT: site/games.json
           SCRAPE_OUTPUT: private-data/scraped-streams.json
           STATUS_OUTPUT: site/status.json
+          SPORTS_STREAMS_MANIFEST_URL: ${{ secrets.SPORTS_STREAMS_MANIFEST_URL }}
         run: node tools/scrape-streams.mjs
 
       - name: Configure GitHub Pages

@@ -2,10 +2,46 @@
 export const HIGHFLY_ORIGIN = "https://sportsfree-us2.highfly.dev";
 export const HIGHFLY_PROVIDER = "Sports Streams";
 
-async function json(path, fetcher) {
+/** Personal installations are server-side configuration, never feed metadata. */
+export function addonApiConfiguration(manifestUrl = "") {
+  if (!manifestUrl) return { base: HIGHFLY_ORIGIN, privateMarkers: [] };
+  const match = /^https:\/\/sports\.highfly\.to\/([A-Za-z0-9_-]{8,1024})\/manifest\.json$/.exec(manifestUrl);
+  if (!match) throw new Error("Sports Streams installation configuration is invalid");
+  let config;
+  try {
+    const decoded = Buffer.from(match[1], "base64url");
+    if (decoded.toString("base64url") !== match[1]) throw new Error("Invalid encoding");
+    config = JSON.parse(decoded.toString("utf8"));
+  }
+  catch { throw new Error("Sports Streams installation configuration is invalid"); }
+  if (typeof config?.freeUserId !== "string" || !config.freeUserId || config.freeUserId.length > 512) {
+    throw new Error("Sports Streams installation configuration is invalid");
+  }
+  return { base: manifestUrl.slice(0, -"/manifest.json".length), privateMarkers: [match[1], config.freeUserId] };
+}
+
+function containsInstallation(value, markers) {
+  if (!markers.length || value == null) return false;
+  if (typeof value === "object") {
+    return Object.entries(value).some(([key, child]) => containsInstallation(key, markers) || containsInstallation(child, markers));
+  }
+  if (typeof value !== "string") return false;
+  let text = value;
+  for (let pass = 0; pass < 8; pass++) {
+    if (markers.some((marker) => text.includes(marker))) return true;
+    // Decode valid runs independently: an unrelated literal '%' must not stop inspection.
+    const decoded = text.replace(/(?:%[0-9a-f]{2})+/gi, (run) =>
+      Buffer.from(run.replace(/%/g, ""), "hex").toString("utf8"));
+    if (decoded === text) return false;
+    text = decoded;
+  }
+  return true; // Excessively nested encoding is not safe publication metadata.
+}
+
+async function json(path, fetcher, base) {
   for (let attempt = 0; attempt < 3; attempt++) {
-    const response = await fetcher(`${HIGHFLY_ORIGIN}${path}`, {
-      headers: { Accept: "application/json" }, signal: AbortSignal.timeout(12_000),
+    const response = await fetcher(`${base}${path}`, {
+      headers: { Accept: "application/json" }, signal: AbortSignal.timeout(12_000), redirect: "error",
     });
     if (response.status === 429 && attempt < 2) {
       const retry = response.headers?.get("retry-after");
@@ -29,7 +65,7 @@ export function addonSources(streams) {
     try { url = new URL(stream.url); } catch { return []; }
     if (url.protocol !== "https:" || url.username || url.password ||
         !/\.(m3u8|mpd)$/i.test(url.pathname) || seen.has(url.href)) return [];
-    if (/upgrade|🔒/i.test(`${stream.name || ""} ${stream.title || ""}`)) return [];
+    if (/upgrade|premium|\bsetup\b|\bconfigure\b|reinstall the addon|🔒/i.test(`${stream.name || ""} ${stream.title || ""}`)) return [];
     seen.add(url.href);
     const headers = {};
     for (const [name, value] of Object.entries(stream.behaviorHints?.proxyHeaders?.request || {})) {
@@ -41,13 +77,16 @@ export function addonSources(streams) {
   });
 }
 
-export async function fetchHighflyGames(now, fetcher = fetch) {
+export async function fetchHighflyGames(now, fetcher = fetch, { manifestUrl = process.env.SPORTS_STREAMS_MANIFEST_URL || "" } = {}) {
   const metas = new Map();
   const errors = [];
+  let config;
+  try { config = addonApiConfiguration(manifestUrl); }
+  catch { return { games: [], catalogCount: 0, errors: ["Sports Streams installation configuration is invalid"] }; }
   try {
     // Page offsets use raw page size, not the count remaining after channel filtering.
     for (let skip = 0, page = 0; page < 10; page++) {
-      const payload = await json(`/catalog/sport/sports_live${skip ? `/skip=${skip}` : ""}.json`, fetcher);
+      const payload = await json(`/catalog/sport/sports_live${skip ? `/skip=${skip}` : ""}.json`, fetcher, config.base);
       const rows = Array.isArray(payload.metas) ? payload.metas : [];
       if (!rows.length) break;
       let added = 0;
@@ -57,7 +96,7 @@ export async function fetchHighflyGames(now, fetcher = fetch) {
       if (!added) break; // Some servers ignore skip; do not loop forever.
       skip += rows.length;
     }
-  } catch (error) { errors.push(String(error.message)); }
+  } catch { errors.push("Sports Streams catalog request failed"); }
   const events = [...metas.values()].filter((meta) =>
     /^(streamed|sf):/.test(String(meta.id)) && meta.type === "sport" &&
     /^LIVE$/i.test(String(meta.releaseInfo)) && String(meta.name || "").trim());
@@ -71,8 +110,11 @@ export async function fetchHighflyGames(now, fetcher = fetch) {
       const position = index++;
       const meta = events[position];
       try {
-        const payload = await json(`/stream/sport/${encodeURIComponent(meta.id)}.json`, fetcher);
-        const sources = addonSources(payload.streams);
+        const payload = await json(`/stream/sport/${encodeURIComponent(meta.id)}.json`, fetcher, config.base);
+        const sources = addonSources(payload.streams).filter((source) => !containsInstallation(source, config.privateMarkers));
+        if (!sources.length && (Array.isArray(payload.streams) ? payload.streams : []).some((stream) => /reinstall the addon/i.test(stream?.name || ""))) {
+          errors.push("Sports Streams requires verified installation configuration");
+        }
         if (!sources.length) continue;
         const rawSport = String(meta.category || meta.genres?.[0] || "Sports").toLowerCase();
         const sport = ({ football: "Soccer", soccer: "Soccer", "american-football": "American Football",
@@ -86,10 +128,10 @@ export async function fetchHighflyGames(now, fetcher = fetch) {
           status: "live", is24x7: false, sources,
           posterUrl: String(meta.background || meta.poster || ""),
         };
-      } catch (error) { errors.push(`${meta.id}: ${error.message}`); }
+      } catch { errors.push("Sports Streams event stream request failed"); }
     }
   }));
-  return { games: games.filter(Boolean), catalogCount: events.length, errors };
+  return { games: games.filter((game) => game && !containsInstallation(game, config.privateMarkers)), catalogCount: events.length, errors };
 }
 
 function canonicalUrl(value) {
