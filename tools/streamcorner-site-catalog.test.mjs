@@ -62,6 +62,47 @@ test('stalled graceful shutdown force-kills the owned browser within its cleanup
   assert.equal(killed, true);
 });
 
+test('HTTP 403 uses verified code cache but catalog requests remain live', async () => {
+  let routeHandler, socketHandler, visits = 0, closed = false;
+  const page = {
+    setDefaultTimeout() {}, url: () => 'https://streamcorner.st/',
+    goto: async () => {
+      const code = ++visits === 1 ? 403 : 200;
+      return { status: () => code, ok: () => code === 200 };
+    },
+    evaluate: async (_, args) => {
+      assert.equal(args.provider, 'alpha');
+      assert.equal(args.id, '');
+      return [{ stream_id: 'current-live-api-row' }];
+    },
+  };
+  const chromium = {
+    launchServer: async () => ({ wsEndpoint: () => 'owned-browser', close: async () => { closed = true; } }),
+    connect: async () => ({ close: async () => {}, newContext: async options => {
+      assert.equal(options.serviceWorkers, 'block');
+      return { route: async (_, handler) => { routeHandler = handler; },
+        routeWebSocket: async (_, handler) => { socketHandler = handler; }, on() {}, newPage: async () => page };
+    } }),
+  };
+  const catalog = await openStreamCornerSiteCatalog({ chromium });
+  try {
+    assert.equal(catalog.usingCachedRuntime, true);
+    assert.equal(visits, 2);
+    assert.deepEqual(await catalog.request('alpha'), [{ stream_id: 'current-live-api-row' }]);
+    let forwarded = false;
+    await routeHandler({
+      request: () => ({ url: () => 'https://data.current.workers.dev/corner?p=alpha', method: () => 'GET', resourceType: () => 'fetch' }),
+      fetch: async options => { assert.equal(options.maxRedirects, 0); forwarded = true; return { status: () => 200 }; },
+      fulfill: async () => {}, abort: async () => assert.fail('Current API should remain live'),
+    });
+    assert.equal(forwarded, true);
+    let socketClosed = false;
+    socketHandler({ close: () => { socketClosed = true; } });
+    assert.equal(socketClosed, true);
+  } finally { await catalog.close(); }
+  assert.equal(closed, true);
+});
+
 test('verified public channel wrappers retain native identity and continuous sports semantics', async () => {
   const embed_url = 'https://amazon.com.pandecocogaming.sbs/?p=' + 'a'.repeat(370);
   const source = await resolveStreamCornerIngestSource('channels', { embed_url, source_name: 'PREMIER SPORTS 1 UK' });

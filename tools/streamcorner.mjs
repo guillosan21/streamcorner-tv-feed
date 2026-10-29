@@ -421,7 +421,8 @@ export async function fetchStreamCornerGames(now, estimatedDurationSeconds, fetc
       const { openStreamCornerSiteCatalog } = await import('./streamcorner-site-catalog.mjs');
       siteCatalog = await openStreamCornerSiteCatalog();
     }
-    const runtime = siteCatalog ? { decoderUrl: siteCatalog.runtimeUrl, fallbackWarning: "" } : await loadStreamCornerRuntime(fetcher);
+    const runtime = siteCatalog ? { decoderUrl: siteCatalog.runtimeUrl,
+      fallbackWarning: siteCatalog.usingCachedRuntime ? "Using verified public runtime cache; catalog API data is live." : "" } : await loadStreamCornerRuntime(fetcher);
     const decoder = siteCatalog ? null : decoderFor(runtime, fetcher);
     const collect = (provider, id = "") => siteCatalog ? siteCatalog.request(provider, id) : request(decoder, runtime.workers, provider, id);
     const catalogErrors = [];
