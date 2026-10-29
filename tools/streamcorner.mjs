@@ -422,6 +422,7 @@ export async function fetchStreamCornerGames(now, estimatedDurationSeconds, fetc
         return starts + estimatedDurationSeconds(title, league, sport) > Math.floor(now.getTime() / 1000);
       }).slice(0, 300);
     const games = [];
+    let detailFailureCount = 0;
     let next = 0;
     await Promise.all(Array.from({ length: Math.min(6, jobs.length) }, async () => {
       while (next < jobs.length) {
@@ -433,15 +434,16 @@ export async function fetchStreamCornerGames(now, estimatedDurationSeconds, fetc
             resolveStreamCornerIngestSource(job.provider, source, index, fetcher)))).filter(Boolean);
           const game = streamCornerGameFromDetail(job, detail, now, estimatedDurationSeconds, nativeSources);
           if (game) games.push(game);
-        } catch { /* One rotating event does not invalidate another event's verified source. */ }
+        } catch { detailFailureCount++; /* Preserve other events while reporting partial collection failure. */ }
       }
     }));
     return {
       games, catalogCounts, decoderUrl: runtime.decoderUrl,
       warning: runtime.fallbackWarning,
+      collectionFailed: catalogErrors.length > 0 || detailFailureCount > 0,
       error: games.length ? "" : `no direct HLS/DASH or native ingest sources passed validation (${catalogErrors.slice(0, 2).join("; ")})`,
     };
   } catch (error) {
-    return { games: [], catalogCounts, decoderUrl: "", warning: "", error: String(error) };
+    return { games: [], catalogCounts, decoderUrl: "", warning: "", collectionFailed: true, error: String(error) };
   }
 }

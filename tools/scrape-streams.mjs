@@ -15,6 +15,7 @@ import { assertSufficientEspnScheduleCoverage, espnLiveScheduleDates, espnSchedu
 import { fetchStreamCornerGames } from "./streamcorner.mjs";
 import { filterKnownStandardDefinitionSources, maxHeightFromManifest } from "./stream-quality.mjs";
 import { isRetiredSource } from "./retired-snapshot.mjs";
+import { buildProviderHealth } from "./provider-health.mjs";
 
 const APP_FEED_OUTPUT = process.env.APP_FEED_OUTPUT || "app/src/main/assets/games.json";
 const SCRAPE_OUTPUT = process.env.SCRAPE_OUTPUT || "data/scraped-streams.json";
@@ -735,6 +736,7 @@ try {
 
   const now = new Date();
   const catalogCounts = {};
+  const sportsUpaFailures = { main: false, admin: false };
   let games = [];
 
   console.log("Fetching StreamCorner catalog from current provider domain");
@@ -772,6 +774,7 @@ try {
     catalogCounts.sportsupaMain = sportsUpa.length;
     games.push(...sportsUpa.filter(isSupportedSportsEntry));
   } catch {
+    sportsUpaFailures.main = true;
     catalogCounts.sportsupaMain = 0;
     console.warn("SportsUpa Main catalog unavailable; omitted without changing other providers");
   }
@@ -782,6 +785,7 @@ try {
     catalogCounts.sportsupaAdmin = sportsUpa.length;
     games.push(...sportsUpa.filter(isSupportedSportsEntry));
   } catch {
+    sportsUpaFailures.admin = true;
     catalogCounts.sportsupaAdmin = 0;
     console.warn("SportsUpa Admin catalog unavailable; omitted without changing other providers");
   }
@@ -930,9 +934,14 @@ try {
   await writeFile(SCRAPE_OUTPUT, `${JSON.stringify(scrape, null, 2)}\n`, "utf8");
 
   if (STATUS_OUTPUT) {
+    const providerHealth = buildProviderHealth({
+      games, catalogCounts, sportsUpaFailures,
+      collectors: { streamcorner: streamCorner, timstreams: timStreams, ppv, dlstreams: dlStreams, highfly },
+    });
     await mkdir(dirname(STATUS_OUTPUT), { recursive: true });
     await writeFile(STATUS_OUTPUT, `${JSON.stringify({
       updatedAt: now.toISOString(),
+      providerHealth,
       gameCount: games.length,
       directStreamCount: directStreams.length,
       m3u8Count: m3u8.length,
