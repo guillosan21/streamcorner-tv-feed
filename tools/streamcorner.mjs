@@ -5,7 +5,8 @@ import { readFile } from "node:fs/promises";
 
 const SITE = "https://streamcorner.st/";
 // #001 uses the exact versioned native HLS binding, independently verified on Android.
-const PROVIDERS = ["admin", "nba", "nfl", "alpha", "beta", "001", "003"];
+const PROVIDERS = ["admin", "nba", "nfl", "alpha", "beta", "001", "003", "channels"];
+const SPORTS_CHANNEL = /sports?|nbcs|espn|dazn|bein|nfl|nba|mlb|nhl|tennis|golf|ufc|racing/i;
 const MAX_ASSET_BYTES = 600_000;
 const MAX_RESPONSE_BYTES = 4_000_000;
 const WORKER_HOST = /^data\.[a-z0-9-]+\.workers\.dev$/;
@@ -136,7 +137,7 @@ function ingestBootstrapPayload(html) {
 /** Read only the verified 003 wrapper; never execute its JavaScript or follow redirects. */
 export async function resolveStreamCornerIngestSource(provider, source, index = 0, fetcher = fetch) {
   const wrapper = source?.embed_url;
-  if (["alpha", "beta"].includes(provider) && typeof wrapper === "string" && wrapper.length <= 1100 &&
+  if (["alpha", "beta", "channels"].includes(provider) && typeof wrapper === "string" && wrapper.length <= 1100 &&
       /^https:\/\/amazon\.com\.pandecocogaming\.sbs\/\?p=[A-Za-z0-9_-]{32,1024}={0,2}$/.test(wrapper) &&
       wrapper === wrapper.trim() && !source.stream_url && !source.stream_keys) {
     const channel = String(source.source_name || `Source ${index + 1}`).trim().slice(0, 70);
@@ -366,11 +367,12 @@ function directSource(source, index) {
 }
 
 export function streamCornerGameFromDetail(job, detail, now, estimatedDurationSeconds, nativeSources = []) {
-  const timestamp = Number(detail?.timestamp || job.row.timestamp || 0);
+  const timestamp = job.provider === "channels" ? 0 : Number(detail?.timestamp || job.row.timestamp || 0);
   const title = String(detail?.event_name || job.row.event_name || detail?.title || job.row.title || "").trim();
-  const league = String(detail?.league || detail?.category || job.row.league || job.row.category || "Sports").trim();
-  const sport = String(detail?.category || job.row.category || detail?.league || job.row.league || "Sports").trim();
-  const is24x7 = /24\s*(?:\/|x)\s*7/i.test(`${title} ${league} ${sport}`);
+  const league = job.provider === "channels" ? "Sports TV" : String(detail?.league || detail?.category || job.row.league || job.row.category || "Sports").trim();
+  const sport = job.provider === "channels" ? "Sports" : String(detail?.category || job.row.category || detail?.league || job.row.league || "Sports").trim();
+  const is24x7 = job.provider === "channels" || /24\s*(?:\/|x)\s*7/i.test(`${title} ${league} ${sport}`);
+  if (job.provider === "channels" && !SPORTS_CHANNEL.test(title)) return null;
   const nowSeconds = Math.floor(now.getTime() / 1000);
   const endSeconds = timestamp > 0 ? timestamp + estimatedDurationSeconds(title, league, sport) : nowSeconds + 8 * 60 * 60;
   const status = timestamp > nowSeconds ? "upcoming" : (is24x7 || timestamp <= 0 || nowSeconds < endSeconds ? "live" : null);
@@ -394,15 +396,38 @@ export function streamCornerGameFromDetail(job, detail, now, estimatedDurationSe
   };
 }
 
+export function prioritizeStreamCornerCatalogJobs(jobs, now, estimatedDurationSeconds, limit = 300) {
+  return [...new Map(jobs.map(job => [`${job.provider}:${job.id}`, job])).values()]
+    .filter(job => {
+      if (job.provider === "channels") return SPORTS_CHANNEL.test(String(job.row.event_name || job.row.title || ""));
+      const starts = Number(job.row.timestamp || 0);
+      if (!starts) return true;
+      return starts + estimatedDurationSeconds(String(job.row.event_name || job.row.title || ""),
+        String(job.row.league || job.row.category || ""), String(job.row.category || job.row.league || "")) > Math.floor(now.getTime() / 1000);
+    })
+    // Continuous sports channels must not starve behind hundreds of future rows.
+    .sort((a, b) => Number(b.provider === "channels") - Number(a.provider === "channels") ||
+      Number(a.row.timestamp || 0) - Number(b.row.timestamp || 0))
+    .slice(0, limit);
+}
+
 export async function fetchStreamCornerGames(now, estimatedDurationSeconds, fetcher = fetch) {
   const catalogCounts = Object.fromEntries(PROVIDERS.map((provider) => [provider, 0]));
+  let siteCatalog;
   try {
-    const runtime = await loadStreamCornerRuntime(fetcher);
-    const decoder = fetcher === fetch ? isolatedDecoderFor(runtime) : decoderFor(runtime, fetcher);
+    // The current site uses an ES-module/worker graph, not the retired standalone
+    // decoder. Keep fetch injection for isolated legacy fixtures only.
+    if (fetcher === fetch) {
+      const { openStreamCornerSiteCatalog } = await import('./streamcorner-site-catalog.mjs');
+      siteCatalog = await openStreamCornerSiteCatalog();
+    }
+    const runtime = siteCatalog ? { decoderUrl: siteCatalog.runtimeUrl, fallbackWarning: "" } : await loadStreamCornerRuntime(fetcher);
+    const decoder = siteCatalog ? null : decoderFor(runtime, fetcher);
+    const collect = (provider, id = "") => siteCatalog ? siteCatalog.request(provider, id) : request(decoder, runtime.workers, provider, id);
     const catalogErrors = [];
     const catalogs = await Promise.all(PROVIDERS.map(async (provider) => {
       try {
-        const result = await request(decoder, runtime.workers, provider);
+        const result = await collect(provider);
         const rows = Array.isArray(result) ? result : (Array.isArray(result?.channels) ? result.channels : []);
         catalogCounts[provider] = rows.length;
         return rows.map((row) => ({ provider, row, id: String(row.stream_id || row.game_id || row.channel_id || "").trim() }))
@@ -412,15 +437,7 @@ export async function fetchStreamCornerGames(now, estimatedDurationSeconds, fetc
         return [];
       }
     }));
-    const jobs = [...new Map(catalogs.flat().map((job) => [`${job.provider}:${job.id}`, job])).values()]
-      .filter((job) => {
-        const starts = Number(job.row.timestamp || 0);
-        if (!starts) return true;
-        const title = String(job.row.event_name || job.row.title || "");
-        const league = String(job.row.league || job.row.category || "");
-        const sport = String(job.row.category || job.row.league || "");
-        return starts + estimatedDurationSeconds(title, league, sport) > Math.floor(now.getTime() / 1000);
-      }).slice(0, 300);
+    const jobs = prioritizeStreamCornerCatalogJobs(catalogs.flat(), now, estimatedDurationSeconds);
     const games = [];
     let detailFailureCount = 0;
     let next = 0;
@@ -428,7 +445,7 @@ export async function fetchStreamCornerGames(now, estimatedDurationSeconds, fetc
       while (next < jobs.length) {
         const job = jobs[next++];
         try {
-          const detail = await request(decoder, runtime.workers, job.provider, job.id);
+          const detail = await collect(job.provider, job.id);
           const streams = Array.isArray(detail?.streams) ? detail.streams.slice(0, 30) : [];
           const nativeSources = (await Promise.all(streams.map((source, index) =>
             resolveStreamCornerIngestSource(job.provider, source, index, fetcher)))).filter(Boolean);
@@ -445,5 +462,7 @@ export async function fetchStreamCornerGames(now, estimatedDurationSeconds, fetc
     };
   } catch (error) {
     return { games: [], catalogCounts, decoderUrl: "", warning: "", collectionFailed: true, error: String(error) };
+  } finally {
+    await siteCatalog?.close();
   }
 }

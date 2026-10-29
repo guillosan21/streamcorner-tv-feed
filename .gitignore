@@ -1,4 +1,5 @@
 data/
 private-data/
+node_modules/
 site/games.json
 site/status.json

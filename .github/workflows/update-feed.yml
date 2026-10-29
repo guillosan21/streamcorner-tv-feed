@@ -8,6 +8,8 @@ on:
       - main
     paths:
       - "tools/**"
+      - "package.json"
+      - "package-lock.json"
       - ".github/workflows/update-feed.yml"
       - "README.md"
       - "site/index.html"
@@ -44,6 +46,11 @@ jobs:
 
       - name: Test provider mapping and duplicate preference
         run: node --test tools/*.test.mjs
+
+      - name: Install public catalog runtime
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx playwright install --with-deps chromium
 
       - name: Validate one-off sanitized snapshot
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.head_commit.message == 'Sanitize deployed feed for retired provider [snapshot-20260927-r4f8]' }}
