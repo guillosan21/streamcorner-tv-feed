@@ -56,8 +56,11 @@ export async function openStreamCornerSiteCatalog({ chromium, lifetimeMs = 180_0
   let browser;
   let closePromise;
   const close = () => closePromise ??= closeCatalogBrowser(browser, server);
+  let phase = 'connect';
+  let status = 0;
   try {
     browser = await chromium.connect(server.wsEndpoint(), { timeout: remaining() });
+    phase = 'context';
     const context = await browser.newContext({ acceptDownloads: false, serviceWorkers: 'block' });
     await context.route('**/*', routeStreamCornerCatalogRequest);
     await context.routeWebSocket('**/*', socket => socket.close());
@@ -65,8 +68,11 @@ export async function openStreamCornerSiteCatalog({ chromium, lifetimeMs = 180_0
     const page = await context.newPage();
     context.on('page', extra => { if (extra !== page) void extra.close(); });
     page.setDefaultTimeout(remaining());
+    phase = 'document';
     const response = await page.goto(SITE, { waitUntil: 'domcontentloaded', timeout: remaining() });
+    status = response?.status() || 0;
     if (!response?.ok() || page.url() !== SITE) throw new Error('StreamCorner catalog page unavailable');
+    phase = 'runtime';
     let initializationTimer;
     const runtimeUrl = await Promise.race([page.evaluate(async () => {
       const read = async url => {
@@ -133,6 +139,6 @@ export async function openStreamCornerSiteCatalog({ chromium, lifetimeMs = 180_0
     };
   } catch {
     await close();
-    throw new Error('StreamCorner public site catalog unavailable');
+    throw new Error(`StreamCorner public site catalog unavailable (phase=${phase}; status=${status})`);
   }
 }

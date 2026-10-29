@@ -24,7 +24,7 @@ test('catalog browser closes on unavailable site without leaking page errors', a
     },
     close: async () => {},
   }) };
-  await assert.rejects(openStreamCornerSiteCatalog({ chromium }), /^Error: StreamCorner public site catalog unavailable$/);
+  await assert.rejects(openStreamCornerSiteCatalog({ chromium }), /^Error: StreamCorner public site catalog unavailable \(phase=document; status=0\)$/);
   assert.equal(closed, true);
 });
 
