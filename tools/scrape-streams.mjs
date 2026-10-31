@@ -384,7 +384,7 @@ export function attachTimeLimitedDlStreamsSources(games, now = new Date()) {
 function inferredWebProvider(embedUrl) {
   const host = runCatchingUrlHost(embedUrl);
   if (!host) return "";
-  if (host === "timstreams.st" || host.endsWith(".timstreams.st") || /^cdx-\d+\.website$/.test(host)) return "TimStreams";
+  if (host === "tim-streams.com" || host === "timstreams.st" || host.endsWith(".timstreams.st") || /^cdx-\d+\.website$/.test(host)) return "TimStreams";
   if (host === "ppv.st" || host.endsWith(".ppv.st") ||
       host === "embedindia.st" || host.endsWith(".embedindia.st") ||
       host === "embedhd.st" || host.endsWith(".embedhd.st") ||

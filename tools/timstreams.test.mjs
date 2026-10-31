@@ -132,7 +132,7 @@ test("legacy unrecognized Tim hosts retain the pre-resolver bridge source", () =
   assert.equal(source.url, "");
   assert.equal(source.embedUrl, "https://timstreams.st/watch/upcoming");
   assert.equal(source.provider, "TimStreams");
-  assert.deepEqual(source.headers, { Referer: "https://timst.top/" });
+  assert.deepEqual(source.headers, { Referer: "https://tim-streams.com/" });
 });
 
 test("TimStreams canonicalizes only the exact Major League Baseball league label", () => {
@@ -148,11 +148,11 @@ test("TimStreams corrects only the exact UEFA Nations League typo", () => {
 });
 
 test("TimStreams prefers the current exact catalog domain and retains exact fallbacks", () => {
-  assert.deepEqual(__testing.apiOrigins, ["https://timst.top", "https://timst.cfd", "https://timstreams.st"]);
-  assert.equal(__testing.safeWatchUrl({ url: "czechia-v-spain-unl-401861118" }), "https://timst.top/watch/czechia-v-spain-unl-401861118");
+  assert.deepEqual(__testing.apiOrigins, ["https://tim-streams.com", "https://timst.top", "https://timst.cfd", "https://timstreams.st"]);
+  assert.equal(__testing.safeWatchUrl({ url: "czechia-v-spain-unl-401861118" }), "https://tim-streams.com/watch/czechia-v-spain-unl-401861118");
   for (const slug of ["//attacker.test", "../escape", "https://attacker.test"]) {
     const watch = __testing.safeWatchUrl({ url: slug });
-    assert.ok(!watch || new URL(watch).origin === "https://timst.top");
+    assert.ok(!watch || new URL(watch).origin === "https://tim-streams.com");
   }
 });
 

@@ -1,9 +1,9 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
-const TIMSTREAMS_API = "https://timst.top/api";
-const TIMSTREAMS_SITE = "https://timst.top/";
-const TIMSTREAMS_API_ORIGINS = ["https://timst.top", "https://timst.cfd", "https://timstreams.st"];
+const TIMSTREAMS_API = "https://tim-streams.com/api";
+const TIMSTREAMS_SITE = "https://tim-streams.com/";
+const TIMSTREAMS_API_ORIGINS = ["https://tim-streams.com", "https://timst.top", "https://timst.cfd", "https://timstreams.st"];
 const TIMSTREAMS_PLAYER_HOSTS = new Set(["exmxbxe.cfd", "epiembeds.online", "ehgembxe.cfd"]);
 const TIMSTREAMS_TIME_ZONE = "America/New_York";
 
