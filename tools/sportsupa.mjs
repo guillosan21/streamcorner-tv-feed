@@ -1,4 +1,5 @@
 const API_BASE = "https://streamed.pk/api";
+const MAIN_API = "https://sportsupa.st/sportsupa-api/index.php/main";
 const EMBED_HOST = "embed.st";
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_EVENTS = 18;
@@ -68,12 +69,47 @@ export function decodeSportsUpaMainWrapper(html) {
 }
 
 /** A fresh provider declaration, not a measurement of each stream's resolution. */
-export function sportsUpaMainDeclaredHd(html) {
+export function sportsUpaMainDeclaredHd(html, mode = "either") {
   if (typeof html !== "string" || Buffer.byteLength(html) > MAX_BODY_BYTES) return false;
+  const mainRenderer = html.match(/function renderMainGroup\(m\)\{([\s\S]*?)\n\}/)?.[1] || "";
+  if (mode !== "legacy" && /const id=m\.id;/.test(mainRenderer) && /const streams=getBestStreams\(id\)/.test(mainRenderer) &&
+      /streams\.forEach\(/.test(mainRenderer) && /src=best/.test(mainRenderer) &&
+      /bid=\$\{s\.id\}/.test(mainRenderer) && /sid=\$\{encodeURIComponent\(id\)\}/.test(mainRenderer) &&
+      /<span class="sq-hd">HD<\/span>/.test(mainRenderer)) return true;
+  if (mode === "current") return false;
   const renderer = html.match(/function renderBestStreams\(\)\{([\s\S]*?)\n\}/)?.[1] || "";
   return /const streams=getBestStreams\(\)/.test(renderer) && /streams\.forEach\(/.test(renderer) &&
     /row\.dataset\.url=s\.url/.test(renderer) &&
     /row\.innerHTML=`<span class="event-source-qual qual-hd">HD<\/span>/.test(renderer);
+}
+
+/** A valid current snapshot is authoritative, even if none of its records can be published. */
+function currentMainMatches(payload, nowMillis) {
+  const items = payload?.items;
+  if (!items || typeof items !== "object" || Array.isArray(items) || Object.keys(items).length > 512) return null;
+  const entries = Object.entries(items);
+  const normalized = (id) => typeof id === "string" ? id.replace(/[^a-z0-9]/gi, "-").slice(0, 60) : "";
+  const titleKey = (meta) => typeof meta?.title === "string" ? meta.title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() : "";
+  const counts = new Map(), deletedTitles = new Set();
+  for (const [key, record] of entries) {
+    const id = normalized(key);
+    counts.set(id, (counts.get(id) || 0) + 1);
+    if (record?.meta?.deleted === true && titleKey(record.meta)) deletedTitles.add(titleKey(record.meta));
+  }
+  return entries.flatMap(([key, record]) => {
+    const meta = record?.meta, id = meta?.id;
+    if (!meta || typeof id !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,179}$/.test(id) ||
+        key !== normalized(id) || counts.get(key) !== 1 || meta.deleted === true || deletedTitles.has(titleKey(meta)) ||
+        !Number.isSafeInteger(record.rev) || record.rev < 0 || !Array.isArray(record.streams) || record.streams.length > 16 ||
+        typeof meta.title !== "string" || !meta.title.trim() || meta.title.length > 300 || /[\r\n\0]/.test(meta.title) ||
+        typeof meta.date !== "number" || !Number.isFinite(meta.date) || meta.date <= 0 || meta.date > 8.64e15 ||
+        meta.date < nowMillis - 12 * 60 * 60 * 1000 || meta.date > nowMillis + 7 * 24 * 60 * 60 * 1000 ||
+        meta.ppv === true || /^ppv-/i.test(id) || (Array.isArray(meta.sources) && meta.sources.some((s) => sourceCategory(s) === "ppv"))) return [];
+    const streams = parseSportsUpaMainPayload(JSON.stringify(record.streams));
+    if (streams.length !== record.streams.length || new Set(streams.map((s) => String(s.id))).size !== streams.length) return [];
+    // Legacy aliases must not override the validated current API date downstream.
+    return [{ ...meta, timestamp: meta.date, mainStreams: streams }];
+  });
 }
 
 async function publicText(fetchImpl, url) {
@@ -185,7 +221,9 @@ export async function readSportsUpaMainTopics(topics, { WebSocketImpl = WebSocke
 
 /** Normal feed: exact public Main topics only; canonical stable embeds only. */
 export async function collectSportsUpaMainGames({ fetchImpl = fetch, readTopics = readSportsUpaMainTopics, now = new Date(), eventIds } = {}) {
-  const matches = rowsFrom(await getJson(fetchImpl, `${API_BASE}/matches/all`));
+  let current = null;
+  try { current = currentMainMatches(await getJson(fetchImpl, MAIN_API), now.getTime()); } catch {}
+  const matches = current ?? rowsFrom(await getJson(fetchImpl, `${API_BASE}/matches/all`));
   const candidates = matches.filter((match) => eventId(match) && asIsoDate(match) &&
     teamNames(match).home && teamNames(match).away && (!eventIds || eventIds.includes(eventId(match))))
     .sort((a, b) => {
@@ -201,9 +239,11 @@ export async function collectSportsUpaMainGames({ fetchImpl = fetch, readTopics 
   const selected = candidates.filter((match) => counts.get(sportsUpaMainTopic(eventId(match))) === 1);
   if (!selected.length) return [];
   const declaredHd = sportsUpaMainDeclaredHd(await publicText(fetchImpl,
-    `https://sportsupa.st/event/?id=${encodeURIComponent(eventId(selected[0]))}`));
+    current !== null ? "https://sportsupa.st/" : `https://sportsupa.st/event/?id=${encodeURIComponent(eventId(selected[0]))}`),
+    current !== null ? "current" : "legacy");
   if (!declaredHd) return [];
-  const topics = await readTopics(selected.map((match) => sportsUpaMainTopic(eventId(match))));
+  const topics = current !== null ? new Map(selected.map((match) => [sportsUpaMainTopic(eventId(match)), match.mainStreams])) :
+    await readTopics(selected.map((match) => sportsUpaMainTopic(eventId(match))));
   const games = [];
   // At most 18 events x two Main selections; concurrency bounded to six.
   let next = 0;
@@ -214,9 +254,10 @@ export async function collectSportsUpaMainGames({ fetchImpl = fetch, readTopics 
       const sources = [];
       for (const [index, row] of rows.slice(0, 2).entries()) {
         const wrapper = sportsUpaMainWrapperUrl(row.url);
-        if (!wrapper) continue;
+        const direct = current !== null ? safeMainEmbed(row.url) : "";
+        if (!wrapper && !direct) continue;
         try {
-          const embedUrl = decodeSportsUpaMainWrapper(await publicText(fetchImpl, wrapper));
+          const embedUrl = direct || decodeSportsUpaMainWrapper(await publicText(fetchImpl, wrapper));
           if (!embedUrl || sources.some((s) => s.embedUrl === embedUrl)) continue;
           sources.push({ name: `SportsUpa • Main HD ${index + 1}`, url: "", embedUrl, provider: "SportsUpa", embedProvider: "SportsUpa", hd: true,
             headers: { Referer: "https://sportsupa.st/" } });
