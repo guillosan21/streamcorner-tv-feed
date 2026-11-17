@@ -1,5 +1,6 @@
 const DLSTREAMS_SITE = "https://dlstreams.st/";
-const DLSTREAMS_CATALOG = new URL("24-7-channels.php", DLSTREAMS_SITE).href;
+const DLSTREAMS_CURRENT_SITE = "https://thedaddy.li/";
+const DLSTREAMS_CATALOG = new URL("24-7-channels.php", DLSTREAMS_CURRENT_SITE).href;
 const ROMPONALIS_PLAYER_PATHS = new Set([
   "/premiumtv/daddy2.php",
   "/premiumtv/daddy3.php",
@@ -184,10 +185,10 @@ export async function fetchDlStreamsGames(now) {
     const response = await fetch(`${DLSTREAMS_CATALOG}?updated=${Date.now()}`, {
       headers: {
         Accept: "text/html,application/xhtml+xml",
-        Referer: DLSTREAMS_SITE,
+        Referer: DLSTREAMS_CURRENT_SITE,
         "User-Agent": "StreamCorner-TV-Feed/1.14",
       },
-      redirect: "follow",
+      redirect: "error",
       signal: AbortSignal.timeout(20_000),
     });
     if (!response.ok) throw new Error(`catalog returned HTTP ${response.status}`);
@@ -199,11 +200,11 @@ export async function fetchDlStreamsGames(now) {
     }
 
     const probe = channels.find((channel) => channel.id === "44") || channels[0];
-    const probeWatchUrl = new URL(`watch.php?id=${probe.id}`, DLSTREAMS_SITE).href;
-    const probeEmbedUrl = new URL(`stream/stream-${probe.id}.php`, DLSTREAMS_SITE).href;
+    const probeWatchUrl = new URL(`watch.php?id=${probe.id}`, DLSTREAMS_CURRENT_SITE).href;
+    const probeEmbedUrl = new URL(`stream/stream-${probe.id}.php`, DLSTREAMS_CURRENT_SITE).href;
     const probeResponse = await fetch(probeEmbedUrl, {
       headers: { Accept: "text/html", Referer: probeWatchUrl, "User-Agent": "StreamCorner-TV-Feed/1.14" },
-      redirect: "follow",
+      redirect: "error",
       signal: AbortSignal.timeout(20_000),
     });
     if (!probeResponse.ok) throw new Error(`player route returned HTTP ${probeResponse.status}`);
