@@ -35,3 +35,10 @@ test("Admin availability cannot retain a completed official game", () => {
     new Date("2026-10-01T23:00:00Z"));
   assert.deepEqual(result, []);
 });
+
+test("current Main availability cannot retain a completed official game", () => {
+  const source = {provider:"SportsUpa",embedProvider:"SportsUpa",hd:true,url:"",
+    embedUrl:"https://streamec.st/embed/ch30.php",headers:{Referer:"https://spotsupa.st/"}};
+  assert.deepEqual(attachScheduleGames([{...base,sources:[source]}],
+    [{...official,scheduleState:"post",status:"ended"}],new Date("2026-10-01T23:00:00Z")),[]);
+});

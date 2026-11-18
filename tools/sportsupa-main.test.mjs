@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { collectSportsUpaMainGames, sportsUpaMainDeclaredHd } from "./sportsupa.mjs";
+import { collectSportsUpaMainGames, sportsUpaMainDeclaredHd, isSportsUpaMainSource } from "./sportsupa.mjs";
 
-const api = "https://sportsupa.st/sportsupa-api/index.php/main";
+const api = "https://spotsupa.st/spotsupa-api/index.php/main";
 const embed = "https://embed.st/embed/ingest/authoredmatch/1/";
 const hd = 'function renderMainGroup(m){\nconst id=m.id;\nconst streams=getBestStreams(id);\nstreams.forEach((s,i)=>{\nrows+=`<a href="event/?src=best&bid=${s.id}&sid=${encodeURIComponent(id)}"><span class="sq-hd">HD</span></a>`;\n});\n}';
 const meta = (id = "authored-match") => ({ id, title: "Home vs Away", date: Date.parse("2026-11-03T07:00:00Z"), teams: {home:{name:"Home"},away:{name:"Away"}} });
@@ -15,7 +15,7 @@ async function collect(data, page = hd) {
       requests.push(url); assert.equal(options.redirect,"error");
       if(url === api) return new Response(JSON.stringify(data));
       if(url.includes("/matches/all")) return new Response("<!doctype html><html>SPA</html>");
-      if(url === "https://sportsupa.st/") return new Response(page);
+      if(url === "https://spotsupa.st/") return new Response(page);
       throw new Error("Unexpected request");
     }, readTopics:async()=>{throw new Error("Current records must not borrow retained MQTT data");}});
   return {games, requests};
@@ -65,7 +65,7 @@ test("current Main can resolve only the existing exact public wrapper without ad
   const games=await collectSportsUpaMainGames({now:new Date("2026-11-03T08:00:00Z"),fetchImpl:async(url)=>{
     requests.push(url);
     if(url===api)return new Response(JSON.stringify(payload(record({streams:[{id:1,url:wrapper}]}))));
-    if(url==="https://sportsupa.st/")return new Response(hd);
+    if(url==="https://spotsupa.st/")return new Response(hd);
     if(url===wrapper)return new Response(`atob("${Buffer.from(embed).toString("base64")}")`);
     throw new Error("Unexpected host");
   }});
@@ -81,5 +81,55 @@ test("unavailable or malformed current API alone permits the legacy read-only fa
       return new Response(`atob("${Buffer.from(embed).toString("base64")}")`);
     },readTopics:async()=>new Map([["sportsupa-best-v2/authored-match",[{id:1,url:"https://rockystream.st/source/fetch.php?hd=123"}]]])});
     assert.equal(games.length,1);
+  }
+});
+
+const dynamicHd = hd.replace('<span class="sq-hd">HD</span>', "${qualityBadge(s.quality,'sq-hd','sq-sd')}");
+const currentEmbed = "https://streamec.st/embed/ch30.php";
+
+test("new public Main catalog publishes exact Streamec HD and FHD rows with current provenance", async () => {
+  for (const quality of ["HD", "FHD"]) {
+    const { games, requests } = await collect(payload(record({streams:[{id:1,url:currentEmbed,quality}]})), dynamicHd);
+    assert.equal(games.length, 1);
+    assert.deepEqual(games[0].sources[0], {name:"SportsUpa • Main HD 1",url:"",embedUrl:currentEmbed,
+      provider:"SportsUpa",embedProvider:"SportsUpa",hd:true,headers:{Referer:"https://spotsupa.st/"}});
+    assert.equal(isSportsUpaMainSource(games[0].sources[0]), true);
+    assert.deepEqual(requests, [api, "https://spotsupa.st/"]);
+  }
+});
+
+test("dynamic Main quality is row-specific and cannot borrow unrelated HD markup", async () => {
+  assert.equal(sportsUpaMainDeclaredHd(dynamicHd, "current"), true);
+  for (const quality of [undefined, null, true, "SD", "", "hd", "1080p", " HD "]) {
+    for (const url of [currentEmbed, embed]) {
+      assert.deepEqual((await collect(payload(record({streams:[{id:1,url,quality}]})),dynamicHd)).games, []);
+    }
+    assert.deepEqual((await collect(payload(record({streams:[{id:1,url:currentEmbed,quality}]})),hd)).games, []);
+  }
+  const unrelated = dynamicHd.replace("qualityBadge(s.quality,'sq-hd','sq-sd')", "qualityBadge(s.quality,'sq-sd','sq-hd')") +
+    "\nfunction renderAdmin(){return qualityBadge(s.quality,'sq-hd','sq-sd')}";
+  assert.equal(sportsUpaMainDeclaredHd(unrelated,"current"), false);
+  const {games}=await collect(payload(record({streams:[{id:1,url:currentEmbed,quality:"SD"},
+    {id:2,url:"https://streamec.st/embed/ch31.php",quality:"HD"}]})),dynamicHd);
+  assert.equal(games[0].sources.length,1);
+  assert.equal(games[0].sources[0].embedUrl,"https://streamec.st/embed/ch31.php");
+});
+
+test("new Main source contract rejects credentials, media state, alternate routes and origins", async () => {
+  const source = {provider:"SportsUpa",embedProvider:"SportsUpa",hd:true,url:"",embedUrl:currentEmbed,
+    headers:{Referer:"https://spotsupa.st/"}};
+  for (const embedUrl of ["",currentEmbed+"?token=secret",currentEmbed+"#player",currentEmbed+"/",
+    currentEmbed.replace("https:","http:"),currentEmbed.replace("streamec.st","streamec.st:443"),
+    currentEmbed.replace("streamec.st","user@streamec.st"),currentEmbed.replace("streamec.st","sub.streamec.st"),
+    currentEmbed.replace("ch30","ch0"),currentEmbed.replace("ch30","ch030"),currentEmbed.replace("ch30","ch1000"),
+    currentEmbed.replace("/embed/","/x/../embed/"),currentEmbed.replace("ch30","ch%33%30"),
+    currentEmbed.replace(".php",".m3u8"),currentEmbed+"\n"]) {
+    assert.equal(isSportsUpaMainSource({...source,embedUrl}),false,embedUrl);
+    assert.deepEqual((await collect(payload(record({streams:[{id:1,url:embedUrl,quality:"HD"}]})),dynamicHd)).games,[]);
+  }
+  for (const override of [{provider:"PPV"},{embedProvider:"PPV"},{hd:false},{url:"https://cdn.test/live.m3u8"},
+    {clearKey:"secret"},{providerSourceRef:"ppv:1"},{headers:{Referer:"https://sportsupa.st/"}},
+    {headers:{Referer:"https://spotsupa.st/",Cookie:"secret"}}]) {
+    assert.equal(isSportsUpaMainSource({...source,...override}),false);
   }
 });

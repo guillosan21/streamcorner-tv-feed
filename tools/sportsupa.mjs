@@ -1,5 +1,6 @@
 const API_BASE = "https://streamed.pk/api";
-const MAIN_API = "https://sportsupa.st/sportsupa-api/index.php/main";
+const MAIN_SITE = "https://spotsupa.st/";
+const MAIN_API = `${MAIN_SITE}spotsupa-api/index.php/main`;
 const EMBED_HOST = "embed.st";
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_EVENTS = 18;
@@ -23,6 +24,10 @@ export function parseSportsUpaMainPayload(payload) {
   } catch { return []; }
 }
 
+function safeCurrentMainEmbed(value) {
+  return typeof value === "string" && /^https:\/\/streamec\.st\/embed\/ch[1-9][0-9]{0,2}\.php$/.test(value) ? value : "";
+}
+
 function safeMainEmbed(value) {
   try {
     if (typeof value !== "string" || !/^https:\/\/embed\.st\/embed\/ingest\/[A-Za-z0-9_-]{1,100}\/[1-9][0-9]{0,2}\/(?:#player=clappr&autoplay=true)?$/.test(value)) return "";
@@ -37,9 +42,11 @@ function safeMainEmbed(value) {
 
 export function isSportsUpaMainSource(source) {
   return source?.provider === "SportsUpa" && source.embedProvider === "SportsUpa" && source.hd === true &&
-    source.url === "" && typeof source.embedUrl === "string" && safeMainEmbed(source.embedUrl) === source.embedUrl &&
+    source.url === "" && typeof source.embedUrl === "string" && source.embedUrl.length > 0 &&
+    (safeCurrentMainEmbed(source.embedUrl) || safeMainEmbed(source.embedUrl)) === source.embedUrl &&
     !source.providerSourceRef && !source.clearKey &&
-    Object.keys(source.headers || {}).length === 1 && source.headers.Referer === "https://sportsupa.st/";
+    Object.keys(source.headers || {}).length === 1 && source.headers.Referer ===
+      (safeCurrentMainEmbed(source.embedUrl) ? MAIN_SITE : "https://sportsupa.st/");
 }
 
 export function sportsUpaMainWrapperUrl(value) {
@@ -68,15 +75,21 @@ export function decodeSportsUpaMainWrapper(html) {
   return urls.size === 1 ? [...urls][0] : "";
 }
 
+/** Only recognize quality markup inside the match-bound public Main renderer. */
+function mainRendererQuality(html) {
+  if (typeof html !== "string" || Buffer.byteLength(html) > MAX_BODY_BYTES) return "";
+  const renderer = html.match(/function renderMainGroup\(m\)\{([\s\S]*?)\n\}/)?.[1] || "";
+  if (!/const id=m\.id;/.test(renderer) || !/const streams=getBestStreams\(id\)/.test(renderer) ||
+      !/streams\.forEach\(/.test(renderer) || !/src=best/.test(renderer) ||
+      !/bid=\$\{s\.id\}/.test(renderer) || !/sid=\$\{encodeURIComponent\(id\)\}/.test(renderer)) return "";
+  if (/qualityBadge\(s\.quality,\s*(['"])sq-hd\1,\s*(['"])sq-sd\2\)/.test(renderer)) return "dynamic";
+  return /<span class="sq-hd">HD<\/span>/.test(renderer) ? "static" : "";
+}
+
 /** A fresh provider declaration, not a measurement of each stream's resolution. */
 export function sportsUpaMainDeclaredHd(html, mode = "either") {
-  if (typeof html !== "string" || Buffer.byteLength(html) > MAX_BODY_BYTES) return false;
-  const mainRenderer = html.match(/function renderMainGroup\(m\)\{([\s\S]*?)\n\}/)?.[1] || "";
-  if (mode !== "legacy" && /const id=m\.id;/.test(mainRenderer) && /const streams=getBestStreams\(id\)/.test(mainRenderer) &&
-      /streams\.forEach\(/.test(mainRenderer) && /src=best/.test(mainRenderer) &&
-      /bid=\$\{s\.id\}/.test(mainRenderer) && /sid=\$\{encodeURIComponent\(id\)\}/.test(mainRenderer) &&
-      /<span class="sq-hd">HD<\/span>/.test(mainRenderer)) return true;
-  if (mode === "current") return false;
+  if (mainRendererQuality(html) && mode !== "legacy") return true;
+  if (typeof html !== "string" || Buffer.byteLength(html) > MAX_BODY_BYTES || mode === "current") return false;
   const renderer = html.match(/function renderBestStreams\(\)\{([\s\S]*?)\n\}/)?.[1] || "";
   return /const streams=getBestStreams\(\)/.test(renderer) && /streams\.forEach\(/.test(renderer) &&
     /row\.dataset\.url=s\.url/.test(renderer) &&
@@ -219,7 +232,7 @@ export async function readSportsUpaMainTopics(topics, { WebSocketImpl = WebSocke
   });
 }
 
-/** Normal feed: exact public Main topics only; canonical stable embeds only. */
+/** Normal feed: authoritative public Main records, with legacy topic compatibility. */
 export async function collectSportsUpaMainGames({ fetchImpl = fetch, readTopics = readSportsUpaMainTopics, now = new Date(), eventIds } = {}) {
   let current = null;
   try { current = currentMainMatches(await getJson(fetchImpl, MAIN_API), now.getTime()); } catch {}
@@ -238,9 +251,10 @@ export async function collectSportsUpaMainGames({ fetchImpl = fetch, readTopics 
   }
   const selected = candidates.filter((match) => counts.get(sportsUpaMainTopic(eventId(match))) === 1);
   if (!selected.length) return [];
-  const declaredHd = sportsUpaMainDeclaredHd(await publicText(fetchImpl,
-    current !== null ? "https://sportsupa.st/" : `https://sportsupa.st/event/?id=${encodeURIComponent(eventId(selected[0]))}`),
-    current !== null ? "current" : "legacy");
+  const page = await publicText(fetchImpl, current !== null ? MAIN_SITE :
+    `https://sportsupa.st/event/?id=${encodeURIComponent(eventId(selected[0]))}`);
+  const declaredHd = sportsUpaMainDeclaredHd(page, current !== null ? "current" : "legacy");
+  const dynamicQuality = current !== null && mainRendererQuality(page) === "dynamic";
   if (!declaredHd) return [];
   const topics = current !== null ? new Map(selected.map((match) => [sportsUpaMainTopic(eventId(match)), match.mainStreams])) :
     await readTopics(selected.map((match) => sportsUpaMainTopic(eventId(match))));
@@ -253,14 +267,17 @@ export async function collectSportsUpaMainGames({ fetchImpl = fetch, readTopics 
       const rows = topics.get(sportsUpaMainTopic(eventId(match))) || [];
       const sources = [];
       for (const [index, row] of rows.slice(0, 2).entries()) {
+        const currentEmbed = current !== null ? safeCurrentMainEmbed(row.url) : "";
+        // Dynamic badges describe each row; a static declaration cannot upgrade SD or unknown rows.
+        if ((dynamicQuality || currentEmbed || row.quality !== undefined) && !["HD", "FHD"].includes(row.quality)) continue;
         const wrapper = sportsUpaMainWrapperUrl(row.url);
-        const direct = current !== null ? safeMainEmbed(row.url) : "";
+        const direct = current !== null ? currentEmbed || safeMainEmbed(row.url) : "";
         if (!wrapper && !direct) continue;
         try {
           const embedUrl = direct || decodeSportsUpaMainWrapper(await publicText(fetchImpl, wrapper));
           if (!embedUrl || sources.some((s) => s.embedUrl === embedUrl)) continue;
           sources.push({ name: `SportsUpa • Main HD ${index + 1}`, url: "", embedUrl, provider: "SportsUpa", embedProvider: "SportsUpa", hd: true,
-            headers: { Referer: "https://sportsupa.st/" } });
+            headers: { Referer: currentEmbed ? MAIN_SITE : "https://sportsupa.st/" } });
         } catch {}
       }
       if (!sources.length) continue;

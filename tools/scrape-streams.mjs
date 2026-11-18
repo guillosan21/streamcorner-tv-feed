@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { fetchTimStreamsGames } from "./timstreams.mjs";
 import { espnEventInfo, mergeEventInfoRows } from "./event-info.mjs";
-import { collectSportsUpaMainGames, collectSportsUpaAdminGames, isSportsUpaHdSource } from "./sportsupa.mjs";
+import { collectSportsUpaMainGames, isSportsUpaHdSource } from "./sportsupa.mjs";
 import { fetchPpvGames } from "./ppvstreams.mjs";
 import { fetchDlStreamsGames, findBroadcastChannelGames } from "./dlstreams.mjs";
 import { fetchHighflyGames, attachAddonSources, preferAddonOverPpv } from "./highfly.mjs";
@@ -779,16 +779,9 @@ try {
     console.warn("SportsUpa Main catalog unavailable; omitted without changing other providers");
   }
 
-  console.log("Fetching SportsUpa HD Admin catalog");
-  try {
-    const sportsUpa = await collectSportsUpaAdminGames({ now });
-    catalogCounts.sportsupaAdmin = sportsUpa.length;
-    games.push(...sportsUpa.filter(isSupportedSportsEntry));
-  } catch {
-    sportsUpaFailures.admin = true;
-    catalogCounts.sportsupaAdmin = 0;
-    console.warn("SportsUpa Admin catalog unavailable; omitted without changing other providers");
-  }
+  // The current site's get(path) adapter is PPV-only. The obsolete streamed.pk Admin
+  // catalog is not SportsUpa provenance and must not be republished under its label.
+  catalogCounts.sportsupaAdmin = 0;
 
   console.log("Fetching ESPN schedules and scoreboards");
   const schedule = await fetchMajorLeagueSchedules(now);
