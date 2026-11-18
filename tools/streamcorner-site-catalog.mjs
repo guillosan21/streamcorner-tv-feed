@@ -1,19 +1,20 @@
 const SITE = 'https://streamcorner.st/';
+export const STREAMCORNER_PUBLIC_SITE = 'https://strmcrnr.st/';
 const MAX_RESPONSE_BYTES = 4_000_000;
 import { loadStreamCornerSiteSnapshot, validateStreamCornerSiteSnapshot } from './streamcorner-site-snapshot.mjs';
 
-export function streamCornerCatalogRequestAllowed(value) {
+export function streamCornerCatalogRequestAllowed(value, site = SITE) {
   try {
     const url = new URL(value);
     return url.protocol === 'https:' && !url.username && !url.password && !url.port &&
-      (url.origin === new URL(SITE).origin ||
+      (url.origin === new URL(site).origin ||
         (/^data\.[a-z0-9-]+\.workers\.dev$/.test(url.hostname) && url.pathname === '/corner'));
   } catch { return false; }
 }
 
-export async function routeStreamCornerCatalogRequest(route) {
+export async function routeStreamCornerCatalogRequest(route, site = SITE) {
   const request = route.request();
-  if (!streamCornerCatalogRequestAllowed(request.url()) ||
+  if (!streamCornerCatalogRequestAllowed(request.url(), site) ||
       !['GET', 'POST'].includes(request.method()) ||
       ['image', 'media', 'font'].includes(request.resourceType())) return route.abort();
   try {
@@ -22,6 +23,117 @@ export async function routeStreamCornerCatalogRequest(route) {
     if (response.status() >= 300 && response.status() < 400) return route.abort();
     return await route.fulfill({ response });
   } catch { return route.abort().catch(() => {}); }
+}
+
+const CHANNEL_PATH = /^\/stream\/channels\/([A-Za-z0-9_-]{1,128})$/;
+
+/** Derive a channel only from the public card's exact link and visible title. */
+export function streamCornerPublicChannel(path, title) {
+  const route = CHANNEL_PATH.exec(path);
+  if (!route || typeof title !== 'string' || !title.trim() || title.length > 180) return null;
+  return { provider: 'channels', id: route[1], row: { title: title.trim() } };
+}
+
+/** Strip only the website's observed Bitmovin selection suffix. */
+export function streamCornerPublicChannelPlayer(value) {
+  if (typeof value !== 'string' || value.length > 1100) return null;
+  const match = /^https:\/\/amazon\.com\.pandecocogaming\.sbs\/\?p=[A-Za-z0-9_-]{32,1024}={0,2}(?=&player=bitmovin$|$)/.exec(value);
+  return match && (value === match[0] || value === match[0] + '&player=bitmovin') ? match[0] : null;
+}
+
+/** Collect rendered sports channel cards and their exact source buttons. The
+ * browser may load catalog documents and data only; embedded players never run. */
+export async function openStreamCornerPublicChannels({ chromium } = {}) {
+  chromium ??= (await import('playwright')).chromium;
+  const server = await chromium.launchServer({ headless: true, timeout: 12_000 });
+  let browser, closePromise;
+  const close = () => {
+    clearTimeout(deadline);
+    return closePromise ??= closeCatalogBrowser(browser, server);
+  };
+  const deadline = setTimeout(() => { void close(); }, 50_000);
+  const site = STREAMCORNER_PUBLIC_SITE;
+  try {
+    browser = await chromium.connect(server.wsEndpoint(), { timeout: 12_000 });
+    const context = await browser.newContext({ acceptDownloads: false, serviceWorkers: 'block' });
+    // Per-page routes take priority. Popups are denied even before their page
+    // object becomes available to close.
+    await context.route('**/*', route => route.abort());
+    await context.routeWebSocket('**/*', socket => socket.close());
+    const visit = async (page, path) => {
+      const url = new URL(path, site).href;
+      page.on('popup', popup => { void popup.close().catch(() => {}); });
+      await page.route('**/*', route => {
+        const request = route.request();
+        const destination = new URL(request.url());
+        const allowed = request.resourceType() === 'document'
+          ? request.url() === url && request.frame() === page.mainFrame() && request.method() === 'GET'
+          : destination.origin !== new URL(site).origin ||
+            (request.method() === 'GET' && !destination.search &&
+              /^\/assets\/[A-Za-z0-9_-]+\.(?:js|css)$/.test(destination.pathname));
+        return allowed ? routeStreamCornerCatalogRequest(route, site) : route.abort();
+      });
+      const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 8_000 });
+      if (!response?.ok() || page.url() !== url) throw Error('StreamCorner public page unavailable');
+    };
+    const index = await context.newPage();
+    let channels;
+    try {
+      await visit(index, '/channels');
+      const cards = index.locator('a[href^="/stream/channels/"]');
+      await cards.first().waitFor({ timeout: 8_000 });
+      channels = (await cards.evaluateAll(links => links.slice(0, 128).map(link => [
+        link.getAttribute('href'), link.querySelector('h2')?.textContent,
+      ]))).map(([path, title]) => streamCornerPublicChannel(path, title)).filter(Boolean);
+    } finally { await index.close(); }
+
+    return {
+      channels,
+      async sources(id) {
+        if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) throw Error('Invalid StreamCorner channel ID');
+        const page = await context.newPage();
+        try {
+          await visit(page, `/stream/channels/${id}`);
+          const buttons = page.locator('fieldset').filter({ has: page.getByText('AVAILABLE SOURCES', { exact: true }) })
+            .locator('button.stream-source-btn[aria-pressed]');
+          await buttons.first().waitFor({ timeout: 6_000 });
+          const sources = [];
+          const count = Math.min(await buttons.count(), 4);
+          for (let i = 0; i < count; i++) {
+            const button = buttons.nth(i);
+            const title = (await button.locator('span.truncate').first().textContent({ timeout: 2_000 }))?.trim();
+            const frameSelector = 'iframe[src^="https://amazon.com.pandecocogaming.sbs/?p="]';
+            const previous = await page.locator(frameSelector).evaluateAll(items => items.map(item => item.getAttribute('src')));
+            const alreadySelected = await button.getAttribute('aria-pressed') === 'true';
+            if (!alreadySelected) await button.click({ timeout: 2_000 });
+            // A site-owned iframe is unrelated to the selected capture. The one valid
+            // player address still has to pass the app's native source validator.
+            const captured = await page.waitForFunction(({ index, selector, previous }) => {
+              const active = document.querySelectorAll('fieldset button.stream-source-btn[aria-pressed]')[index];
+              const frames = document.querySelectorAll(selector);
+              const src = frames.length === 1 ? frames[0].getAttribute('src') : null;
+              return active?.getAttribute('aria-pressed') === 'true' && src && !previous.includes(src) ? src : null;
+            }, { index: i, selector: frameSelector, previous: alreadySelected ? [] : previous },
+            { timeout: 1_200 }).catch(() => null);
+            // Avoid binding a late iframe from this click to a later source.
+            if (!captured) break;
+            const raw = await captured?.jsonValue();
+            await captured?.dispose();
+            const embed = streamCornerPublicChannelPlayer(raw);
+            if (page.url() !== new URL(`/stream/channels/${id}`, site).href) {
+              throw Error('StreamCorner channel changed during discovery');
+            }
+            if (embed) sources.push({ embed_url: embed, source_name: title });
+          }
+          return sources;
+        } finally { await page.close(); }
+      },
+      close,
+    };
+  } catch {
+    await close();
+    throw Error('StreamCorner public channel catalog unavailable');
+  }
 }
 
 async function closeCatalogBrowser(browser, server) {

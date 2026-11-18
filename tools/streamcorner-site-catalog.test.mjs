@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { streamCornerCatalogRequestAllowed, openStreamCornerSiteCatalog, routeStreamCornerCatalogRequest } from './streamcorner-site-catalog.mjs';
+import { streamCornerCatalogRequestAllowed, openStreamCornerSiteCatalog, routeStreamCornerCatalogRequest,
+  STREAMCORNER_PUBLIC_SITE, streamCornerPublicChannel, streamCornerPublicChannelPlayer } from './streamcorner-site-catalog.mjs';
 import { resolveStreamCornerIngestSource, streamCornerGameFromDetail, prioritizeStreamCornerCatalogJobs } from './streamcorner.mjs';
 import { isNativeStreamCornerSource } from './playback-identity.mjs';
 
@@ -11,6 +12,22 @@ test('catalog browser allows only provider assets and public worker requests', (
     'https://user:password@streamcorner.st/', 'file:///etc/passwd', 'https://127.0.0.1/',
     'https://ads.example/ad.js', 'https://data.current.workers.dev/private',
     'https://streamcorner.st:8443/']) assert.equal(streamCornerCatalogRequestAllowed(url), false);
+});
+
+test('new domain admits exact public sports channel links and the observed player suffix', () => {
+  assert.equal(streamCornerCatalogRequestAllowed('https://strmcrnr.st/channels', STREAMCORNER_PUBLIC_SITE), true);
+  assert.equal(streamCornerCatalogRequestAllowed('https://strmcrnr.st.evil.test/channels', STREAMCORNER_PUBLIC_SITE), false);
+  assert.equal(streamCornerCatalogRequestAllowed('https://streamcorner.st/channels', STREAMCORNER_PUBLIC_SITE), false);
+  assert.deepEqual(streamCornerPublicChannel('/stream/channels/premier-sports-1-uk', 'PREMIER SPORTS 1 UK'),
+    { provider: 'channels', id: 'premier-sports-1-uk', row: { title: 'PREMIER SPORTS 1 UK' } });
+  for (const path of ['/stream/channels/id?next=evil', '/stream/channels/id#fragment', '//evil.test/stream/channels/id', '/stream/channels/%69d']) {
+    assert.equal(streamCornerPublicChannel(path, 'NFL Network'), null);
+  }
+  const wrapper = 'https://amazon.com.pandecocogaming.sbs/?p=' + 'a'.repeat(370);
+  assert.equal(streamCornerPublicChannelPlayer(wrapper + '&player=bitmovin'), wrapper);
+  for (const value of [wrapper + '&player=bitmovin&extra=1', wrapper + '#fragment', wrapper.replace('.sbs/', '.sbs.evil.test/')]) {
+    assert.equal(streamCornerPublicChannelPlayer(value), null);
+  }
 });
 
 test('catalog browser closes on unavailable site without leaking page errors', async () => {

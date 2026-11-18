@@ -31,7 +31,7 @@ export function isNativeStreamCornerSource(source) {
     String(source.name || "").startsWith("StreamCorner • ") && source.url === "" && !source.clearKey &&
     source.providerGeneration === (v3 ? "v3" : v2 ? "v2" : "v1") && source.availabilityEvidence === "provider-reported" &&
     source.embedUrl === (v3 ? path : v2 ? `https://taifood-blog.asia${path}` : `https://embed.st${path}#player=clappr&autoplay=true`) &&
-    source.headers?.Referer === "https://streamcorner.st/" && Object.keys(source.headers).length === 1);
+    source.headers?.Referer === "https://strmcrnr.st/" && Object.keys(source.headers).length === 1);
 }
 
 export function isStreamCornerNativeCandidate(source) {

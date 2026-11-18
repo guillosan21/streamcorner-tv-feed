@@ -3,7 +3,8 @@ import { Worker } from "node:worker_threads";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
-const SITE = "https://streamcorner.st/";
+const SITE = "https://strmcrnr.st/";
+const LEGACY_CATALOG_SITE = "https://streamcorner.st/";
 // #001 uses the exact versioned native HLS binding, independently verified on Android.
 const PROVIDERS = ["admin", "nba", "nfl", "alpha", "beta", "001", "003", "channels"];
 const SPORTS_CHANNEL = /sports?|nbcs|espn|dazn|bein|nfl|nba|mlb|nhl|tennis|golf|ufc|racing/i;
@@ -212,14 +213,14 @@ async function textResponse(fetcher, url, timeoutMs = 12_000) {
 
 /** Resolve the current site's decoder and worker pool instead of pinning rotating asset hashes. */
 export async function discoverStreamCornerRuntime(fetcher = fetch) {
-  const html = await textResponse(fetcher, SITE);
+  const html = await textResponse(fetcher, LEGACY_CATALOG_SITE);
   const entryPath = [...html.matchAll(/<script\b[^>]*\btype=["']module["'][^>]*\bsrc=["']([^"']+\.js)["']/gi)]
     .map((match) => match[1])[0] ||
     [...html.matchAll(/<script\b[^>]*\bsrc=["']([^"']*\/assets\/[^"']+\.js)["']/gi)]
       .map((match) => match[1]).find((path) => path.startsWith("/assets/"));
   if (!entryPath) throw new Error("current StreamCorner entry asset not found");
-  const entryUrl = new URL(entryPath, SITE);
-  if (entryUrl.origin !== new URL(SITE).origin || !entryUrl.pathname.startsWith("/assets/")) {
+  const entryUrl = new URL(entryPath, LEGACY_CATALOG_SITE);
+  if (entryUrl.origin !== new URL(LEGACY_CATALOG_SITE).origin || !entryUrl.pathname.startsWith("/assets/")) {
     throw new Error("entry asset left the provider origin");
   }
   const entry = await textResponse(fetcher, entryUrl.href);
@@ -266,7 +267,7 @@ export async function loadStreamCornerRuntime(fetcher) {
     if (digest !== cached.decoderSha256 || cached.decoderCode.length > MAX_ASSET_BYTES ||
         !Array.isArray(cached.workers) || !cached.workers.length ||
         !cached.workers.every((host) => WORKER_HOST.test(host)) ||
-        !new URL(cached.decoderUrl).href.startsWith(`${SITE}assets/`) ||
+        !new URL(cached.decoderUrl).href.startsWith(`${LEGACY_CATALOG_SITE}assets/`) ||
         !/^[A-Za-z_$][\w$]*$/.test(cached.decoderExport)) {
       throw new Error(`live runtime failed and cached runtime is invalid: ${String(liveError)}`);
     }
@@ -415,16 +416,39 @@ export async function fetchStreamCornerGames(now, estimatedDurationSeconds, fetc
   const catalogCounts = Object.fromEntries(PROVIDERS.map((provider) => [provider, 0]));
   let siteCatalog;
   try {
-    // The current site uses an ES-module/worker graph, not the retired standalone
-    // decoder. Keep fetch injection for isolated legacy fixtures only.
+    // Collect the new site's published channel controls. The former module API
+    // rejects calls from outside the website's catalog components.
     if (fetcher === fetch) {
-      const { openStreamCornerSiteCatalog } = await import('./streamcorner-site-catalog.mjs');
-      siteCatalog = await openStreamCornerSiteCatalog();
+      const { openStreamCornerPublicChannels } = await import('./streamcorner-site-catalog.mjs');
+      siteCatalog = await openStreamCornerPublicChannels();
+      catalogCounts.channels = siteCatalog.channels.length;
+      const jobs = prioritizeStreamCornerCatalogJobs(siteCatalog.channels, now, estimatedDurationSeconds, 20);
+      let failures = 0;
+      let next = 0;
+      const games = new Array(jobs.length);
+      await Promise.all(Array.from({ length: Math.min(4, jobs.length) }, async () => {
+        while (next < jobs.length) {
+          const index = next++;
+          const job = jobs[index];
+          try {
+            const rows = await siteCatalog.sources(job.id);
+            const sources = (await Promise.all(rows.map((source, i) =>
+              resolveStreamCornerIngestSource(job.provider, source, i)))).filter(Boolean);
+            games[index] = streamCornerGameFromDetail(job, {}, now, estimatedDurationSeconds, sources);
+          } catch { failures++; }
+        }
+      }));
+      const playable = games.filter(Boolean);
+      return {
+        games: playable, catalogCounts, decoderUrl: "",
+        warning: "The current public collector covers compatible continuous sports channels.",
+        collectionFailed: failures > 0 || !playable.length,
+        error: playable.length ? "" : "No compatible StreamCorner channel sources were found.",
+      };
     }
-    const runtime = siteCatalog ? { decoderUrl: siteCatalog.runtimeUrl,
-      fallbackWarning: siteCatalog.usingCachedRuntime ? "Using verified public runtime cache; catalog API data is live." : "" } : await loadStreamCornerRuntime(fetcher);
-    const decoder = siteCatalog ? null : decoderFor(runtime, fetcher);
-    const collect = (provider, id = "") => siteCatalog ? siteCatalog.request(provider, id) : request(decoder, runtime.workers, provider, id);
+    const runtime = await loadStreamCornerRuntime(fetcher);
+    const decoder = decoderFor(runtime, fetcher);
+    const collect = (provider, id = "") => request(decoder, runtime.workers, provider, id);
     const catalogErrors = [];
     const catalogs = await Promise.all(PROVIDERS.map(async (provider) => {
       try {

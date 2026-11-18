@@ -19,7 +19,7 @@ test("ALPHA and BETA publish exact public wrappers without media or key material
     assert.deepEqual(sourceProvenanceErrors([{id:provider,sources:[row]}]),[]);
     for(const patch of [{clearKey:"private"},{url:"https://cdn.example/live.mpd"},{providerGeneration:"v1"},
       {embedUrl:page+"&extra=1"},{providerSourceRef:row.providerSourceRef+"="},
-      {headers:{Referer:"https://streamcorner.st/",Authorization:"private"}}]) {
+      {headers:{Referer:"https://strmcrnr.st/",Authorization:"private"}}]) {
       assert.equal(isNativeStreamCornerSource({...row,...patch}),false);
     }
     for(const bad of [page+" ",page+"#x",page+"&extra=1",page.replace(".sbs/",".sbs.evil.test/"),
@@ -108,7 +108,7 @@ test("publisher identity and capability gates preserve only exact native binding
     for (const patch of [{ provider: "PPV" }, { embedProvider: "PPV" }, { providerGeneration: "v2" },
       { providerSourceRef: native.providerSourceRef + "=" }, { providerSourceRef: native.providerSourceRef + "\n" },
       { embedUrl: native.embedUrl + "\n" }, { availabilityEvidence: "verified" },
-      { headers: { Referer: "https://streamcorner.st/", Authorization: "volatile" } },
+      { headers: { Referer: "https://strmcrnr.st/", Authorization: "volatile" } },
       { url: "https://cdn.example/volatile.m3u8" }, { embedUrl: wrapper }]) {
       const malformed = { ...native, ...patch };
       assert.equal(isNativeStreamCornerSource(malformed), false);
@@ -241,7 +241,7 @@ test("publishes only direct HLS/DASH from the new catalog and preserves ClearKey
   }, now, () => 8 * 60 * 60);
   assert.equal(game.sources.length, 1);
   assert.equal(game.sources[0].provider, "StreamCorner");
-  assert.equal(game.sources[0].headers.Referer, "https://streamcorner.st/");
+  assert.equal(game.sources[0].headers.Referer, "https://strmcrnr.st/");
   assert.equal(game.sources[0].clearKey, `${"a".repeat(32)}:${"b".repeat(32)}`);
   assert.equal(game.sources[0].url, "https://cdn.example/live.mpd?token=abc");
 });
