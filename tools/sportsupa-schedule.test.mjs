@@ -17,6 +17,8 @@ const base = {
 };
 const official = { ...base, id: "espn-example", provider: "espn",
   scoreboardEventId: "official-example", scheduleState: "pre", sources: [] };
+const currentMain = { ...sources[0], embedUrl: "https://streamec.st/embed/ch30.php",
+  headers: { Referer: "https://spotsupa.st/" } };
 
 test("Main and Admin merge into one official card without inferring live from available sources", () => {
   const result = attachScheduleGames(sources.map(source => ({ ...base, sources: [source] })),
@@ -37,8 +39,27 @@ test("Admin availability cannot retain a completed official game", () => {
 });
 
 test("current Main availability cannot retain a completed official game", () => {
-  const source = {provider:"SportsUpa",embedProvider:"SportsUpa",hd:true,url:"",
-    embedUrl:"https://streamec.st/embed/ch30.php",headers:{Referer:"https://spotsupa.st/"}};
-  assert.deepEqual(attachScheduleGames([{...base,sources:[source]}],
+  assert.deepEqual(attachScheduleGames([{...base,sources:[currentMain]}],
     [{...official,scheduleState:"post",status:"ended"}],new Date("2026-10-01T23:00:00Z")),[]);
+});
+
+test("past-kickoff current Main rows require ESPN live confirmation", () => {
+  const game = () => ({ ...base, sources: [currentMain] });
+  const afterKickoff = new Date("2026-10-01T23:00:00Z");
+  assert.deepEqual(attachScheduleGames([game()], [], afterKickoff), []);
+  const [live] = attachScheduleGames([game()], [{ ...official, scheduleState: "in", status: "live" }], afterKickoff);
+  assert.equal(live.status, "live");
+  assert.deepEqual(live.sources, [currentMain]);
+  const [future] = attachScheduleGames([game()], [], new Date("2026-10-01T16:00:00Z"));
+  assert.equal(future.status, "upcoming");
+  assert.deepEqual(future.sources, [currentMain]);
+});
+
+test("an unconfirmed SportsUpa source does not remove independent coverage", () => {
+  const other = {
+    provider: "PPV", embedProvider: "PPV", name: "PPV • HD", url: "",
+    embedUrl: "https://embedindia.st/embed/example",
+  };
+  const [mixed] = attachScheduleGames([{ ...base, sources: [currentMain, other] }], [], new Date("2026-10-01T23:00:00Z"));
+  assert.deepEqual(mixed.sources, [other]);
 });

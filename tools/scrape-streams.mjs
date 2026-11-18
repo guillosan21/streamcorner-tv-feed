@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { fetchTimStreamsGames } from "./timstreams.mjs";
 import { espnEventInfo, mergeEventInfoRows } from "./event-info.mjs";
-import { collectSportsUpaMainGames, isSportsUpaHdSource } from "./sportsupa.mjs";
+import { collectSportsUpaMainGames, isCurrentSportsUpaMainSource, isSportsUpaHdSource } from "./sportsupa.mjs";
 import { fetchPpvGames } from "./ppvstreams.mjs";
 import { fetchDlStreamsGames, findBroadcastChannelGames } from "./dlstreams.mjs";
 import { fetchHighflyGames, attachAddonSources, preferAddonOverPpv } from "./highfly.mjs";
@@ -333,7 +333,16 @@ export function attachScheduleGames(sourceGames, scheduleGames, now = new Date()
     }
   }
 
-  return deduplicateFeedGames(games.filter((game) => game.scheduleState !== "post"));
+  return deduplicateFeedGames(games.filter((game) => game.scheduleState !== "post")).flatMap((game) => {
+    // The current Main catalog can retain yesterday's playable channel under a
+    // completed game's title, even when ESPN's live-only schedule omits the game.
+    if (game.scheduleState === "in" || Date.parse(game.startsAt) > now.getTime()) return [game];
+    const original = game.sources || [];
+    const sources = original.filter((source) => !isCurrentSportsUpaMainSource(source));
+    if (sources.length === original.length) return [game];
+    if (!sources.length && !game.scoreboardEventId) return [];
+    return [{ ...game, sources }];
+  });
 }
 
 

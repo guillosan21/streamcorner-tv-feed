@@ -49,6 +49,10 @@ export function isSportsUpaMainSource(source) {
       (safeCurrentMainEmbed(source.embedUrl) ? MAIN_SITE : "https://sportsupa.st/");
 }
 
+export function isCurrentSportsUpaMainSource(source) {
+  return Boolean(isSportsUpaMainSource(source) && safeCurrentMainEmbed(source.embedUrl));
+}
+
 export function sportsUpaMainWrapperUrl(value) {
   try {
     if (typeof value !== "string" || !/^https:\/\/rockystream\.st\/source\/fetch\.php\?[^#\s]+$/.test(value)) return "";
