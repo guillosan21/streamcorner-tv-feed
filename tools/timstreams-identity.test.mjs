@@ -4,6 +4,13 @@ import { __testing } from "./timstreams.mjs";
 import { isValidTimStreamsSourceRef, isOpaqueTimStreamsSource, playbackIdentity, deduplicatePlaybackSources } from "./playback-identity.mjs";
 const source = () => __testing.buildResolvedSource({ name: "DAZN Canada" }, { url: "czechia-v-spain-unl-401861118" }, "https://exmxbxe.cfd/he5phqny-6982?private=transient");
 test("rotated catalog host survives real publication dedup without opaque player URLs", () => {
+  const current = __testing.buildResolvedSource({ name: "ESPN" }, { url: "selected-event" }, "https://shoewiki.click/player");
+  assert.ok(isValidTimStreamsSourceRef(current.providerSourceRef));
+  assert.ok(isOpaqueTimStreamsSource(current));
+  assert.equal(deduplicatePlaybackSources([current, { ...current }]).length, 1);
+  const lookalikeRef = current.providerSourceRef.split("~");
+  lookalikeRef[2] = Buffer.from("shoewiki.click.evil.example").toString("base64url");
+  assert.equal(isValidTimStreamsSourceRef(lookalikeRef.join("~")), false);
   const row = __testing.buildResolvedSource({ name: "ESPN" }, { url: "selected-event" }, "https://ehgembxe.cfd/player");
   assert.ok(isOpaqueTimStreamsSource(row));
   assert.equal(deduplicatePlaybackSources([row, { ...row }]).length, 1);

@@ -7,7 +7,7 @@ export function isRetiredPizarraSource(source) {
   });
 }
 
-const TIMSTREAMS_PLAYER_HOSTS = new Set(["exmxbxe.cfd", "epiembeds.online", "ehgembxe.cfd"]);
+const TIMSTREAMS_PLAYER_HOSTS = new Set(["exmxbxe.cfd", "epiembeds.online", "ehgembxe.cfd", "shoewiki.click"]);
 const STREAMCORNER_INGEST_PATH = /^\/embed\/ingest\/(?:[A-Za-z0-9_-]{1,64}\/){0,3}[A-Za-z0-9_-]{1,128}\/?$/;
 const STREAMCORNER_001_PATH = /^\/embed\/(?:nhl|nfl|mlb|nba|soccer|ucl|efl-league-two|efl-championship)\/[0-9]{4}-[0-9]{2}-[0-9]{2}\/[a-z0-9]+(?:-[a-z0-9]+){1,8}$/;
 
