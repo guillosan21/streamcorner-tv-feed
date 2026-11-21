@@ -4,7 +4,8 @@ import { isIP } from "node:net";
 const TIMSTREAMS_API = "https://tim-streams.com/api";
 const TIMSTREAMS_SITE = "https://tim-streams.com/";
 const TIMSTREAMS_API_ORIGINS = ["https://tim-streams.com", "https://timst.top", "https://timst.cfd", "https://timstreams.st"];
-const TIMSTREAMS_PLAYER_HOSTS = new Set(["exmxbxe.cfd", "epiembeds.online", "ehgembxe.cfd"]);
+const TIMSTREAMS_PLAYER_HOSTS = new Set(["exmxbxe.cfd", "epiembeds.online", "ehgembxe.cfd", "shoewiki.click"]);
+const TIMSTREAMS_OPAQUE_PLAYER_HOSTS = new Set(["ehgembxe.cfd", "shoewiki.click"]);
 const TIMSTREAMS_TIME_ZONE = "America/New_York";
 
 function safeTimPlayerUrl(value) {
@@ -162,10 +163,10 @@ function safeTimPlayerResponseUrl(value, expectedUrl, eventSlug) {
 // Request-local proof only: one same-host HTTP redirect from the exact catalog URL.
 function safeTimOpaqueRedirectUrl(value, fromUrl, firstUrl, hop) {
   const first = safeTimPlayerUrl(firstUrl);
-  if (!first || fromUrl !== first || hop !== 0 || new URL(first).hostname !== "ehgembxe.cfd") return "";
+  if (!first || fromUrl !== first || hop !== 0 || !TIMSTREAMS_OPAQUE_PLAYER_HOSTS.has(new URL(first).hostname)) return "";
   try {
     const actual = new URL(value);
-    if (actual.protocol !== "https:" || actual.host !== "ehgembxe.cfd" || actual.username || actual.password ||
+    if (actual.protocol !== "https:" || actual.host !== new URL(first).host || actual.username || actual.password ||
         actual.search || actual.hash || actual.href !== value || actual.pathname.length > 2048 ||
         !/^\/play\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(actual.pathname)) return "";
     return actual.href;
@@ -292,7 +293,7 @@ async function resolveStream(stream, event, verifyLive, playerFetchOptions) {
   const embedUrl = safeTimPlayerUrl(stream?.url);
   const watchUrl = safeWatchUrl(event);
   if (!embedUrl || !watchUrl || event?.vip === true || stream?.vip === true) return null;
-  if (new URL(embedUrl).hostname === "ehgembxe.cfd") {
+  if (TIMSTREAMS_OPAQUE_PLAYER_HOSTS.has(new URL(embedUrl).hostname)) {
     // This player now bootstraps media in the browser. Publish only its fresh
     // catalog identity, like upcoming references; Android verifies actual live
     // media on selection. Never label this declaration as a healthy stream.

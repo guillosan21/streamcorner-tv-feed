@@ -2,6 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { __testing } from "./timstreams.mjs";
+test("current shoewiki host retains exact catalog and one-hop opaque proof", () => {
+  const first = "https://shoewiki.click/f596f98r-9887";
+  const target = "https://shoewiki.click/play/header..iv.ciphertext.tag";
+  assert.equal(__testing.safeTimPlayerUrl(first), first);
+  assert.equal(__testing.safeTimOpaqueRedirectUrl(target, first, first, 0), target);
+  assert.equal(__testing.safeTimPlayerUrl(first.replace('shoewiki.click', 'shoewiki.click.evil.example')), '');
+  assert.equal(__testing.safeTimOpaqueRedirectUrl(target.replace('shoewiki.click', 'ehgembxe.cfd'), first, first, 0), '');
+  assert.equal(__testing.safeTimOpaqueRedirectUrl(target, first, first, 1), '');
+});
 test("browser-only catalog sources are reported references, not verified transports", async () => {
   const stream = { name: "ESPN", url: "https://ehgembxe.cfd/player?private=transient" };
   const event = { url: "utah-utes-v-colorado-buffaloes-401856833" };
