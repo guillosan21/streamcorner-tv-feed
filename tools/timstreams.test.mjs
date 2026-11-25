@@ -2,6 +2,34 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { __testing } from "./timstreams.mjs";
+test("confirmed player connection failures are scoped and reconsidered on each refresh", async () => {
+  const failed = "shoewiki.click";
+  const calls = [];
+  const events = [{ streams: [
+    { url: `https://${failed}/one?session=not-forwarded` },
+    { url: `https://${failed}/two` },
+    { url: "https://ehgembxe.cfd/healthy" },
+    { url: "https://shoewiki.click.evil.test/player" },
+  ] }];
+  let reachable = false;
+  const options = {
+    requirePublicUrl: async () => {},
+    fetchImpl: async (url, request) => {
+      calls.push(url);
+      assert.equal(request.redirect, "manual");
+      if (new URL(url).hostname === failed && !reachable) {
+        throw new TypeError("fetch failed", { cause: { code: "ECONNRESET" } });
+      }
+      return new Response(null, { status: 502 });
+    },
+  };
+  assert.deepEqual([...await __testing.unreachableOpaquePlayerHosts(events, options)], [failed]);
+  assert.ok(calls.includes(`https://${failed}/one`) && calls.includes(`https://${failed}/two`));
+  assert.ok(calls.every(url => !url.includes("?") && !url.includes("evil.test")));
+  reachable = true;
+  assert.equal((await __testing.unreachableOpaquePlayerHosts(events, options)).size, 0);
+});
+
 test("current shoewiki host retains exact catalog and one-hop opaque proof", () => {
   const first = "https://shoewiki.click/f596f98r-9887";
   const target = "https://shoewiki.click/play/header..iv.ciphertext.tag";

@@ -393,6 +393,44 @@ function canonicalLeague(rawLeague, sport, title) {
   return value;
 }
 
+// A browser-only page may legitimately return a redirect or HTTP error to the collector.
+// Confirm hard connection failures twice before withholding sources for this refresh.
+async function unreachableOpaquePlayerHosts(events, {
+  fetchImpl = fetch, requirePublicUrl = requirePublicHttpsUrl,
+} = {}) {
+  const samples = new Map();
+  for (const event of events) {
+    for (const stream of Array.isArray(event.streams) ? event.streams : []) {
+      const url = safeTimPlayerUrl(stream?.url);
+      if (!url || stream.vip === true) continue;
+      const player = new URL(url);
+      if (!TIMSTREAMS_OPAQUE_PLAYER_HOSTS.has(player.hostname)) continue;
+      const paths = samples.get(player.hostname) || new Set();
+      if (paths.size < 2) paths.add(player.origin + player.pathname);
+      samples.set(player.hostname, paths);
+    }
+  }
+  const hardFailure = async (url) => {
+    try {
+      await requirePublicUrl(url);
+      const response = await fetchImpl(url, {
+        redirect: "manual",
+        headers: { Accept: "text/html", Referer: TIMSTREAMS_SITE },
+        signal: AbortSignal.timeout(4_000),
+      });
+      await response.body?.cancel().catch(() => {});
+      return false;
+    } catch (error) {
+      return ["ECONNRESET", "ECONNREFUSED", "ENOTFOUND"].includes(error?.cause?.code || error?.code);
+    }
+  };
+  const results = await Promise.all([...samples].map(async ([host, paths]) => {
+    const [first, second = first] = paths;
+    return await hardFailure(first) && await hardFailure(second) ? host : null;
+  }));
+  return new Set(results.filter(Boolean));
+}
+
 export async function fetchTimStreamsGames(now, estimatedDurationSeconds) {
   try {
     let payload = null;
@@ -417,6 +455,7 @@ export async function fetchTimStreamsGames(now, estimatedDurationSeconds) {
     const events = payload.events;
     const genres = new Map((Array.isArray(payload?.genres) ? payload.genres : []).map((genre) => [String(genre.id), genre]));
     const eligible = events.filter((event) => event?.vip !== true && !["17", "18"].includes(String(event?.genre)));
+    const unreachableHosts = await unreachableOpaquePlayerHosts(eligible);
     const resolved = new Array(eligible.length);
     let nextIndex = 0;
     await Promise.all(Array.from({ length: Math.min(8, Math.max(1, eligible.length)) }, async () => {
@@ -427,7 +466,10 @@ export async function fetchTimStreamsGames(now, estimatedDurationSeconds) {
         const startsAt = parseWallClock(event?.time) || now;
         const verifyLive = startsAt.getTime() <= now.getTime();
         const streams = await Promise.all((Array.isArray(event?.streams) ? event.streams : [])
-          .map((stream) => resolveStream(stream, event, verifyLive)));
+          .map((stream) => {
+            const url = safeTimPlayerUrl(stream?.url);
+            return url && !unreachableHosts.has(new URL(url).hostname) ? resolveStream(stream, event, verifyLive) : null;
+          }));
         resolved[index] = streams.filter(Boolean);
       }
     }));
@@ -466,7 +508,8 @@ export async function fetchTimStreamsGames(now, estimatedDurationSeconds) {
       resolvedStreamCount: games.flatMap((game) => game.sources).filter((source) => source.availabilityEvidence !== "provider-reported").length,
       providerReportedStreamCount: games.flatMap((game) => game.sources).filter((source) => source.availabilityEvidence === "provider-reported").length,
       apiUrl,
-      error: "",
+      unreachablePlayerHostCount: unreachableHosts.size,
+      error: unreachableHosts.size ? "TimStreams player host failed two connection checks" : "",
     };
   } catch (error) {
     return { games: [], catalogCount: 0, resolvedStreamCount: 0, providerReportedStreamCount: 0, apiUrl: `${TIMSTREAMS_API}/live-upcoming`, error: String(error) };
@@ -474,6 +517,7 @@ export async function fetchTimStreamsGames(now, estimatedDurationSeconds) {
 }
 
 export const __testing = {
+  unreachableOpaquePlayerHosts,
   parseWallClock, decodeEmbedPayload, safeWatchUrl, safeTimPlayerUrl, canonicalLeague,
   buildResolvedSource, timProviderSourceRef,
   fetchTimCatalog, fetchTimPlayerPage, resolveStream, safeTimPlayerResponseUrl, safeTimOpaqueRedirectUrl, apiOrigins: TIMSTREAMS_API_ORIGINS,

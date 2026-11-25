@@ -28,7 +28,9 @@ export function buildProviderHealth({ games = [], catalogCounts = {}, collectors
       ? (sourceCount || catalogCount || partialFailure ? "degraded" : "unavailable")
       : sourceCount ? "available" : "no-playable-sources";
     // Select fixed strings; never publish collector errors, URLs, or installation data.
-    const diagnostic = state === "unavailable" ? "Collector failed; no current catalog or published source references."
+    const diagnostic = key === "timstreams" && collector.unreachablePlayerHostCount > 0
+      ? "Player connections failed twice. Affected sources are withheld while the catalog remains available."
+      : state === "unavailable" ? "Collector failed; no current catalog or published source references."
       : state === "degraded" ? "Collector failure; partial catalog or source coverage may remain."
       : state === "available" ? "Source references published; playback is not verified by this status."
       : "No current source references published; no collector failure reported.";
