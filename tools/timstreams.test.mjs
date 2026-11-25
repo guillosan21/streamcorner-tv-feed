@@ -28,6 +28,8 @@ test("confirmed player connection failures are scoped and reconsidered on each r
   assert.ok(calls.every(url => !url.includes("?") && !url.includes("evil.test")));
   reachable = true;
   assert.equal((await __testing.unreachableOpaquePlayerHosts(events, options)).size, 0);
+  const timedOut = { ...options, fetchImpl: async () => { throw new DOMException("timeout", "TimeoutError"); } };
+  assert.deepEqual([...await __testing.unreachableOpaquePlayerHosts(events, timedOut)], [failed, "ehgembxe.cfd"]);
 });
 
 test("current shoewiki host retains exact catalog and one-hop opaque proof", () => {

@@ -416,12 +416,14 @@ async function unreachableOpaquePlayerHosts(events, {
       const response = await fetchImpl(url, {
         redirect: "manual",
         headers: { Accept: "text/html", Referer: TIMSTREAMS_SITE },
-        signal: AbortSignal.timeout(4_000),
+        signal: AbortSignal.timeout(6_000),
       });
       await response.body?.cancel().catch(() => {});
       return false;
     } catch (error) {
-      return ["ECONNRESET", "ECONNREFUSED", "ENOTFOUND"].includes(error?.cause?.code || error?.code);
+      return error?.name === "TimeoutError" ||
+        ["ECONNRESET", "ECONNREFUSED", "ENOTFOUND", "EHOSTUNREACH", "ENETUNREACH",
+          "ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT"].includes(error?.cause?.code || error?.code);
     }
   };
   const results = await Promise.all([...samples].map(async ([host, paths]) => {
