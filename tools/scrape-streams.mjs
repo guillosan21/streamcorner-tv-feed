@@ -3,12 +3,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { fetchTimStreamsGames } from "./timstreams.mjs";
+import { fetchZLiveGames } from "./zlive.mjs";
 import { espnEventInfo, mergeEventInfoRows } from "./event-info.mjs";
 import { collectSportsUpaMainGames, isCurrentSportsUpaMainSource, isSportsUpaHdSource } from "./sportsupa.mjs";
 import { fetchPpvGames } from "./ppvstreams.mjs";
 import { fetchDlStreamsGames, findBroadcastChannelGames } from "./dlstreams.mjs";
 import { fetchHighflyGames, attachAddonSources, preferAddonOverPpv } from "./highfly.mjs";
-import { feedSourceKey, isOpaqueTimStreamsSource, isRetiredPizarraSource, isNativeStreamCornerSource, isStreamCornerNativeCandidate } from "./playback-identity.mjs";
+import { feedSourceKey, isOpaqueTimStreamsSource, isOpaqueZLiveSource, isRetiredPizarraSource, isNativeStreamCornerSource, isStreamCornerNativeCandidate } from "./playback-identity.mjs";
 import { loadTrustedFeedBaseline } from "./feed-baseline.mjs";
 import { compareFeedSourceCoverage } from "./feed-safety.mjs";
 import { assertSufficientEspnScheduleCoverage, espnLiveScheduleDates, espnScheduleDates, fetchEspnSchedules } from "./espn-schedules.mjs";
@@ -416,7 +417,7 @@ export function sourceProvenanceErrors(rows) {
       if (isRetiredSource(source)) {
         errors.push(`${game.id}: retired source cannot be published`);
       }
-      if (!["StreamCorner", "TimStreams", "PPV", "Sports Streams", "DLStreams", "SportsUpa"].includes(provider)) {
+      if (!["StreamCorner", "TimStreams", "PPV", "Sports Streams", "DLStreams", "SportsUpa", "ZLive"].includes(provider)) {
         errors.push(`${game.id}: invalid provider ${provider || "<empty>"}`);
       }
       if (!String(source.name || "").startsWith(`${provider} • `)) {
@@ -430,6 +431,9 @@ export function sourceProvenanceErrors(rows) {
       }
       if (provider === "TimStreams" && rawProviderRef && !isOpaqueTimStreamsSource(source)) {
         errors.push(`${game.id}: TimStreams source must be an exact catalog ref without published transport state`);
+      }
+      if ((provider === "ZLive" || /^zlive:/i.test(rawProviderRef.trim())) && !isOpaqueZLiveSource(source)) {
+        errors.push(`${game.id}: ZLive requires an opaque event reference without transport state`);
       }
       if (inferred && embedProvider !== inferred) {
         errors.push(`${game.id}: source has embedProvider=${embedProvider || "<empty>"}, expected ${inferred}`);
@@ -601,6 +605,9 @@ function activeGameAt(game, nowMs) {
 
 export async function inspectStreamCapabilities(source, provider = "") {
   if (isRetiredSource(source)) return null;
+  if (source.provider === "ZLive" || /^zlive:/i.test(String(source.providerSourceRef || "").trim())) {
+    return isOpaqueZLiveSource(source) ? source : null;
+  }
   if (isStreamCornerNativeCandidate(source)) return isNativeStreamCornerSource(source) ? source : null;
   if (source.provider === "TimStreams" && source.providerSourceRef) return isOpaqueTimStreamsSource(source) ? source : null;
   if (source.provider === "SportsUpa") return isSportsUpaHdSource(source) ? source : null;
@@ -792,6 +799,12 @@ try {
   // catalog is not SportsUpa provenance and must not be republished under its label.
   catalogCounts.sportsupaAdmin = 0;
 
+  console.log("Fetching ZLive catalog");
+  const zlive = await fetchZLiveGames(new Date());
+  catalogCounts.zlive = zlive.catalogCount;
+  if (zlive.error) console.warn(`ZLive unavailable: ${zlive.error}`);
+  games.push(...zlive.games.filter(isSupportedSportsEntry));
+
   console.log("Fetching ESPN schedules and scoreboards");
   const schedule = await fetchMajorLeagueSchedules(now);
   console.log(`ESPN schedule coverage accepted: ${Math.round(schedule.scheduleCoverage.coverage * 100)}% (${schedule.scheduleCoverage.successfulSlots}/${schedule.scheduleCoverage.expectedSlots} league/date slots)`);
@@ -938,7 +951,7 @@ try {
   if (STATUS_OUTPUT) {
     const providerHealth = buildProviderHealth({
       games, catalogCounts, sportsUpaFailures,
-      collectors: { streamcorner: streamCorner, timstreams: timStreams, ppv, dlstreams: dlStreams, highfly },
+      collectors: { streamcorner: streamCorner, timstreams: timStreams, ppv, dlstreams: dlStreams, zlive, highfly },
     });
     await mkdir(dirname(STATUS_OUTPUT), { recursive: true });
     await writeFile(STATUS_OUTPUT, `${JSON.stringify({

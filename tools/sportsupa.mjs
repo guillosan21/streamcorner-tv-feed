@@ -242,7 +242,9 @@ export async function collectSportsUpaMainGames({ fetchImpl = fetch, readTopics 
   try { current = currentMainMatches(await getJson(fetchImpl, MAIN_API), now.getTime()); } catch {}
   const matches = current ?? rowsFrom(await getJson(fetchImpl, `${API_BASE}/matches/all`));
   const candidates = matches.filter((match) => eventId(match) && asIsoDate(match) &&
-    teamNames(match).home && teamNames(match).away && (!eventIds || eventIds.includes(eventId(match))))
+    teamNames(match).home && teamNames(match).away && (!eventIds || eventIds.includes(eventId(match))) &&
+    (current === null || match.mainStreams.some(({ url }) =>
+      safeCurrentMainEmbed(url) || safeMainEmbed(url) || sportsUpaMainWrapperUrl(url))))
     .sort((a, b) => {
       const x = kickoffPriority(a, now.getTime()), y = kickoffPriority(b, now.getTime());
       return x[0] - y[0] || x[1] - y[1] || eventId(a).localeCompare(eventId(b));
@@ -270,7 +272,8 @@ export async function collectSportsUpaMainGames({ fetchImpl = fetch, readTopics 
       const match = selected[next++];
       const rows = topics.get(sportsUpaMainTopic(eventId(match))) || [];
       const sources = [];
-      for (const [index, row] of rows.slice(0, 2).entries()) {
+      for (const row of (current === null ? rows.slice(0, 2) : rows)) {
+        if (sources.length === 2) break;
         const currentEmbed = current !== null ? safeCurrentMainEmbed(row.url) : "";
         // Dynamic badges describe each row; a static declaration cannot upgrade SD or unknown rows.
         if ((dynamicQuality || currentEmbed || row.quality !== undefined) && !["HD", "FHD"].includes(row.quality)) continue;
@@ -280,7 +283,7 @@ export async function collectSportsUpaMainGames({ fetchImpl = fetch, readTopics 
         try {
           const embedUrl = direct || decodeSportsUpaMainWrapper(await publicText(fetchImpl, wrapper));
           if (!embedUrl || sources.some((s) => s.embedUrl === embedUrl)) continue;
-          sources.push({ name: `SportsUpa • Main HD ${index + 1}`, url: "", embedUrl, provider: "SportsUpa", embedProvider: "SportsUpa", hd: true,
+          sources.push({ name: `SportsUpa • Main HD ${sources.length + 1}`, url: "", embedUrl, provider: "SportsUpa", embedProvider: "SportsUpa", hd: true,
             headers: { Referer: currentEmbed ? MAIN_SITE : "https://sportsupa.st/" } });
         } catch {}
       }

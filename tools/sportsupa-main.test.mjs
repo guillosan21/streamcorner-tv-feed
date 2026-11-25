@@ -110,7 +110,8 @@ test("dynamic Main quality is row-specific and cannot borrow unrelated HD markup
     "\nfunction renderAdmin(){return qualityBadge(s.quality,'sq-hd','sq-sd')}";
   assert.equal(sportsUpaMainDeclaredHd(unrelated,"current"), false);
   const {games}=await collect(payload(record({streams:[{id:1,url:currentEmbed,quality:"SD"},
-    {id:2,url:"https://streamec.st/embed/ch31.php",quality:"HD"}]})),dynamicHd);
+    {id:2,url:"https://strmfree.st/embed/football/unavailable1080p",quality:"FHD"},
+    {id:3,url:"https://streamec.st/embed/ch31.php",quality:"HD"}]})),dynamicHd);
   assert.equal(games[0].sources.length,1);
   assert.equal(games[0].sources[0].embedUrl,"https://streamec.st/embed/ch31.php");
 });

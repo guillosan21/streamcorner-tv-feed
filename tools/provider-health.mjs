@@ -4,6 +4,7 @@ const PROVIDERS = [
   ["TimStreams", "timstreams"],
   ["PPV", "ppv"],
   ["DLStreams", "dlstreams"],
+  ["ZLive", "zlive"],
   ["SportsUpa", "sportsupa"],
   ["Sports Streams", "highfly"],
 ];

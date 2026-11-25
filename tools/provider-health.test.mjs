@@ -2,11 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildProviderHealth } from "./provider-health.mjs";
 
-test("reports all six providers and distinguishes collector failure from empty catalogs", () => {
+test("reports all seven providers and distinguishes collector failure from empty catalogs", () => {
   const health = buildProviderHealth({ collectors: {
     timstreams: { error: "request failed" }, ppv: { error: "request failed" },
   }, sportsUpaFailures: { main: true, admin: true } });
-  assert.deepEqual(Object.keys(health), ["StreamCorner", "TimStreams", "PPV", "DLStreams", "SportsUpa", "Sports Streams"]);
+  assert.deepEqual(Object.keys(health), ["StreamCorner", "TimStreams", "PPV", "DLStreams", "ZLive", "SportsUpa", "Sports Streams"]);
   for (const provider of ["TimStreams", "PPV", "SportsUpa"]) assert.equal(health[provider].state, "unavailable");
   for (const provider of ["StreamCorner", "DLStreams", "Sports Streams"]) assert.equal(health[provider].state, "no-playable-sources");
 });
@@ -56,7 +56,7 @@ test("diagnostics never serialize raw failures, URLs, tokens, or extra collector
   const health = buildProviderHealth({ collectors: {
     streamcorner: { error: secret, warning: secret, decoderUrl: secret },
     timstreams: { error: secret }, ppv: { error: secret }, dlstreams: { error: secret },
-    highfly: { errors: [secret], config: secret },
+    highfly: { errors: [secret], config: secret }, zlive: { error: secret },
   }, sportsUpaFailures: { main: true, admin: true } });
   assert.doesNotMatch(JSON.stringify(health), /https:|private|token|decoderUrl|config/);
   for (const row of Object.values(health)) {

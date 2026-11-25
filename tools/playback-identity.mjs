@@ -61,10 +61,18 @@ export function isOpaqueTimStreamsSource(source) {
     !source.url && !source.embedUrl && !source.clearKey && !Object.keys(source.headers || {}).length;
 }
 
+export function isOpaqueZLiveSource(source) {
+  return source?.provider === "ZLive" && source.providerGeneration === "v1" &&
+    /^zlive:[A-Za-z0-9][A-Za-z0-9._~-]{0,119}$/.test(source.providerSourceRef || "") &&
+    !source.url && !source.embedUrl && !source.embedProvider && !source.clearKey &&
+    !Object.keys(source.headers || {}).length;
+}
+
 export function feedSourceKey(source) {
   if (isRetiredPizarraSource(source)) return "";
   if (isStreamCornerNativeCandidate(source) && !isNativeStreamCornerSource(source)) return "";
   const providerSourceRef = String(source?.providerSourceRef || "");
+  if ((source?.provider === "ZLive" || /^zlive:/i.test(providerSourceRef.trim())) && !isOpaqueZLiveSource(source)) return "";
   if (source?.provider === "TimStreams" && (source?.providerGeneration === "v2" || providerSourceRef.trim().startsWith("timstreams:v2~")) && !isOpaqueTimStreamsSource(source)) return "";
   if (providerSourceRef) {
     const generation = String(source?.providerGeneration || "v1").trim() || "v1";
@@ -84,6 +92,9 @@ export function playbackIdentity(source) {
     return isOpaqueTimStreamsSource(source) ? `resolver:${source.providerSourceRef}:generation:v2` : "";
   }
   if (isRetiredPizarraSource(source)) return "";
+  if (source?.provider === "ZLive" || /^zlive:/i.test(String(source?.providerSourceRef || "").trim())) {
+    return isOpaqueZLiveSource(source) ? feedSourceKey(source) : "";
+  }
   const endpoint = String(source?.url || source?.embedUrl || "").trim();
   return endpoint ? `endpoint:${endpoint}` : "";
 }
