@@ -87,6 +87,20 @@ test("unavailable or malformed current API alone permits the legacy read-only fa
 const dynamicHd = hd.replace('<span class="sq-hd">HD</span>', "${qualityBadge(s.quality,'sq-hd','sq-sd')}");
 const currentEmbed = "https://streamec.st/embed/ch30.php";
 
+test("PPV schedule metadata preserves independently published SportsUpa HD channels", async () => {
+  const id = "ppv-123";
+  const { games } = await collect({ items: { [id]: record({
+    meta: { ...meta(id), ppv: true, sources: [{ source: "ppv", id }] },
+    streams: [
+      { id: 1, url: "https://taifood-blog.asia/embed/basketball/example", quality: "FHD" },
+      { id: 2, url: "https://streamec.st/embed/ch31.php", quality: "SD" },
+      { id: 3, url: currentEmbed, quality: "HD" },
+    ],
+  }) } }, dynamicHd);
+  assert.equal(games.length, 1);
+  assert.deepEqual(games[0].sources.map(({ provider, embedUrl }) => [provider, embedUrl]), [["SportsUpa", currentEmbed]]);
+});
+
 test("new public Main catalog publishes exact Streamec HD and FHD rows with current provenance", async () => {
   for (const quality of ["HD", "FHD"]) {
     const { games, requests } = await collect(payload(record({streams:[{id:1,url:currentEmbed,quality}]})), dynamicHd);

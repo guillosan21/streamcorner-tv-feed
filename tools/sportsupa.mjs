@@ -120,12 +120,18 @@ function currentMainMatches(payload, nowMillis) {
         !Number.isSafeInteger(record.rev) || record.rev < 0 || !Array.isArray(record.streams) || record.streams.length > 16 ||
         typeof meta.title !== "string" || !meta.title.trim() || meta.title.length > 300 || /[\r\n\0]/.test(meta.title) ||
         typeof meta.date !== "number" || !Number.isFinite(meta.date) || meta.date <= 0 || meta.date > 8.64e15 ||
-        meta.date < nowMillis - 12 * 60 * 60 * 1000 || meta.date > nowMillis + 7 * 24 * 60 * 60 * 1000 ||
-        meta.ppv === true || /^ppv-/i.test(id) || (Array.isArray(meta.sources) && meta.sources.some((s) => sourceCategory(s) === "ppv"))) return [];
+        meta.date < nowMillis - 12 * 60 * 60 * 1000 || meta.date > nowMillis + 7 * 24 * 60 * 60 * 1000) return [];
     const streams = parseSportsUpaMainPayload(JSON.stringify(record.streams));
     if (streams.length !== record.streams.length || new Set(streams.map((s) => String(s.id))).size !== streams.length) return [];
+    const ppvSchedule = meta.ppv === true || /^ppv-/i.test(id) ||
+      (Array.isArray(meta.sources) && meta.sources.some((source) => sourceCategory(source) === "ppv"));
+    // The schedule can come from PPV while an independent Main stream belongs to SportsUpa.
+    // Accept only the current exact SportsUpa channel route from these mixed records.
+    const mainStreams = ppvSchedule
+      ? streams.filter(({ url, quality }) => safeCurrentMainEmbed(url) && ["HD", "FHD"].includes(quality))
+      : streams;
     // Legacy aliases must not override the validated current API date downstream.
-    return [{ ...meta, timestamp: meta.date, mainStreams: streams }];
+    return [{ ...meta, timestamp: meta.date, mainStreams }];
   });
 }
 
